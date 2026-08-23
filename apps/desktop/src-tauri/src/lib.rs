@@ -202,31 +202,38 @@ pub fn run() {
             // with the HID/F13 fallback below; Accessibility is used only later
             // when Scanner::handle injects into another app.
             let native_app = app.handle().clone();
-            let lifecycle_app = app.handle().clone();
             let native_detector = Arc::clone(&detector);
             let native_scanner = scanner.clone();
-            let native_switch = arduino::ArduinoSwitch::spawn(
-                arduino::ReconnectPolicy::default(),
-                move |event| {
-                    if std::env::var("HANBEON_LOG").is_ok() {
-                        eprintln!("[arduino] lifecycle: {event:?}");
-                    }
-                    if let Err(error) = lifecycle_app.emit(arduino::EVENT_LIFECYCLE, event) {
-                        eprintln!("Arduino lifecycle event를 보내지 못했습니다. {error}");
-                    }
-                },
-                move |event| {
-                    arduino::route_switch_event(
-                        &native_detector,
-                        event,
-                        Instant::now(),
-                        |judgement| {
-                            input::announce(&native_app, judgement);
-                            native_scanner.handle(&native_app, judgement);
-                        },
-                    );
-                },
-            );
+            let native_switch = arduino::ArduinoCoordinator::new(move || {
+                let lifecycle_app = native_app.clone();
+                let switch_app = native_app.clone();
+                let switch_detector = Arc::clone(&native_detector);
+                let switch_scanner = native_scanner.clone();
+                arduino::ArduinoSwitch::spawn(
+                    arduino::ReconnectPolicy::default(),
+                    move |event| {
+                        if std::env::var("HANBEON_LOG").is_ok() {
+                            eprintln!("[arduino] lifecycle: {event:?}");
+                        }
+                        if let Err(error) =
+                            lifecycle_app.emit(arduino::EVENT_LIFECYCLE, event)
+                        {
+                            eprintln!("Arduino lifecycle event를 보내지 못했습니다. {error}");
+                        }
+                    },
+                    move |event| {
+                        arduino::route_switch_event(
+                            &switch_detector,
+                            event,
+                            Instant::now(),
+                            |judgement| {
+                                input::announce(&switch_app, judgement);
+                                switch_scanner.handle(&switch_app, judgement);
+                            },
+                        );
+                    },
+                )
+            });
             app.manage(native_switch);
 
             let registered = input::register(

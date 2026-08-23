@@ -7,7 +7,7 @@
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -331,6 +331,145 @@ impl Drop for ArduinoSwitch {
     }
 }
 
+/// The only component currently permitted to own the Arduino serial port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArduinoOwner {
+    Connection,
+    Installer,
+    Idle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoordinatorError {
+    InstallerActive,
+}
+
+/// Describes why an installer lease ended. Every variant restores normal input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallerExit {
+    Success,
+    Failure,
+    Cancelled,
+}
+
+struct CoordinatorState {
+    owner: ArduinoOwner,
+    switch: Option<ArduinoSwitch>,
+}
+
+struct CoordinatorInner {
+    state: Mutex<CoordinatorState>,
+    spawn_switch: Box<dyn Fn() -> ArduinoSwitch + Send + Sync>,
+}
+
+/// Serializes normal input and firmware installation ownership.
+///
+/// Acquiring an installer lease first removes the normal connection from state,
+/// unregisters LED output, and synchronously joins its worker. Dropping the lease
+/// always starts a fresh connection, including during error propagation or unwind.
+#[derive(Clone)]
+pub struct ArduinoCoordinator {
+    inner: Arc<CoordinatorInner>,
+}
+
+impl ArduinoCoordinator {
+    pub fn new<F>(spawn_switch: F) -> Self
+    where
+        F: Fn() -> ArduinoSwitch + Send + Sync + 'static,
+    {
+        let switch = spawn_switch();
+        Self {
+            inner: Arc::new(CoordinatorInner {
+                state: Mutex::new(CoordinatorState {
+                    owner: ArduinoOwner::Connection,
+                    switch: Some(switch),
+                }),
+                spawn_switch: Box::new(spawn_switch),
+            }),
+        }
+    }
+
+    pub fn owner(&self) -> ArduinoOwner {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .owner
+    }
+
+    pub fn acquire_installer(&self) -> Result<InstallerOwnership, CoordinatorError> {
+        let switch = {
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.owner != ArduinoOwner::Connection {
+                return Err(CoordinatorError::InstallerActive);
+            }
+            state.owner = ArduinoOwner::Idle;
+            state
+                .switch
+                .take()
+                .expect("connection owner must hold a switch")
+        };
+
+        // The global sender must disappear before waiting for the worker. This
+        // prevents scanner output from entering a transport that is shutting down.
+        unregister_active_output();
+        switch.stop();
+
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .owner = ArduinoOwner::Installer;
+        Ok(InstallerOwnership {
+            inner: Arc::clone(&self.inner),
+            active: true,
+        })
+    }
+}
+
+fn resume_connection(inner: &CoordinatorInner) {
+    let mut state = inner
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.owner != ArduinoOwner::Installer {
+        return;
+    }
+    state.owner = ArduinoOwner::Idle;
+    let switch = (inner.spawn_switch)();
+    state.switch = Some(switch);
+    state.owner = ArduinoOwner::Connection;
+}
+
+#[must_use = "dropping the installer ownership restores the Arduino connection"]
+pub struct InstallerOwnership {
+    inner: Arc<CoordinatorInner>,
+    active: bool,
+}
+
+impl InstallerOwnership {
+    pub fn owner(&self) -> ArduinoOwner {
+        ArduinoOwner::Installer
+    }
+
+    pub fn finish(mut self, _exit: InstallerExit) {
+        self.active = false;
+        resume_connection(&self.inner);
+    }
+}
+
+impl Drop for InstallerOwnership {
+    fn drop(&mut self) {
+        if self.active {
+            resume_connection(&self.inner);
+        }
+    }
+}
+
 /// Queues LED feedback for the currently active native transport.
 ///
 /// The registry lock protects only sender replacement. It is released before the
@@ -381,6 +520,12 @@ fn unregister_output(id: u64) {
             .as_ref()
             .is_some_and(|(active_id, _)| *active_id == id)
     {
+        *active = None;
+    }
+}
+
+fn unregister_active_output() {
+    if let Ok(mut active) = ACTIVE_OUTPUT.get_or_init(|| Mutex::new(None)).lock() {
         *active = None;
     }
 }
@@ -598,6 +743,32 @@ pub mod test_support {
         flush_output(serial, output)
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum CoordinatorEvent {
+        Spawned(u64),
+        Joined(u64),
+    }
+
+    pub fn coordinator_probe(id: u64, events: mpsc::Sender<CoordinatorEvent>) -> ArduinoSwitch {
+        let (shutdown, shutdown_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let (output, _output_rx) = mpsc::sync_channel(1);
+            let _registration = register_output(output);
+            let _ = events.send(CoordinatorEvent::Spawned(id));
+            let _ = shutdown_rx.recv();
+            let _ = events.send(CoordinatorEvent::Joined(id));
+        });
+        ArduinoSwitch {
+            shutdown,
+            worker: Some(worker),
+        }
+    }
+
+    pub fn coordinator_probe_silent() -> ArduinoSwitch {
+        let (events, _events_rx) = mpsc::channel();
+        coordinator_probe(0, events)
+    }
+
     pub fn shutdown_probe() -> (ArduinoSwitch, Receiver<()>) {
         let (shutdown, shutdown_rx) = mpsc::channel();
         let (consumed, consumed_rx) = mpsc::channel();
@@ -794,6 +965,77 @@ mod tests {
         );
         started_rx.recv().unwrap();
         switch.stop();
+    }
+
+    #[test]
+    fn installer_ownership_unregisters_output_before_join_and_restores_fresh_switch() {
+        let _registry = test_support::registry_guard();
+        let (events_tx, events_rx) = mpsc::channel();
+        let next_id = AtomicU64::new(1);
+        let coordinator = ArduinoCoordinator::new(move || {
+            test_support::coordinator_probe(
+                next_id.fetch_add(1, Ordering::Relaxed),
+                events_tx.clone(),
+            )
+        });
+
+        assert_eq!(coordinator.owner(), ArduinoOwner::Connection);
+        assert_eq!(
+            events_rx.recv().unwrap(),
+            test_support::CoordinatorEvent::Spawned(1)
+        );
+        let ownership = coordinator.acquire_installer().unwrap();
+        assert_eq!(ownership.owner(), ArduinoOwner::Installer);
+        assert_eq!(
+            events_rx.recv().unwrap(),
+            test_support::CoordinatorEvent::Joined(1)
+        );
+        assert_eq!(
+            enqueue_output(OutputCommand::Flash),
+            Err(QueueError::Stopped)
+        );
+
+        drop(ownership);
+        assert_eq!(coordinator.owner(), ArduinoOwner::Connection);
+        assert_eq!(
+            events_rx.recv().unwrap(),
+            test_support::CoordinatorEvent::Spawned(2)
+        );
+    }
+
+    #[test]
+    fn installer_ownership_rejects_overlap_and_restores_after_every_exit() {
+        let _registry = test_support::registry_guard();
+        let coordinator = ArduinoCoordinator::new(test_support::coordinator_probe_silent);
+
+        for exit in [
+            InstallerExit::Success,
+            InstallerExit::Failure,
+            InstallerExit::Cancelled,
+        ] {
+            let ownership = coordinator.acquire_installer().unwrap();
+            assert_eq!(
+                coordinator.acquire_installer().err(),
+                Some(CoordinatorError::InstallerActive)
+            );
+            ownership.finish(exit);
+            assert_eq!(coordinator.owner(), ArduinoOwner::Connection);
+        }
+    }
+
+    #[test]
+    fn installer_ownership_restores_connection_during_unwind() {
+        let _registry = test_support::registry_guard();
+        let coordinator = ArduinoCoordinator::new(test_support::coordinator_probe_silent);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ownership = coordinator.acquire_installer().unwrap();
+            panic!("installer panic");
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(coordinator.owner(), ArduinoOwner::Connection);
+        assert!(coordinator.acquire_installer().is_ok());
     }
 
     #[test]
