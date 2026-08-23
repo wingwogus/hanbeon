@@ -23,6 +23,8 @@ enigo = "0.6.1"
 rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
 serialport = "4.9.0"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+sha2 = "0.11.0"
 
 # 이후 단계에서 붙일 crate. 버전은 반드시 `cargo add`로 확정한다.
 #   cargo add tauri-plugin-store             # 사용자 프로필 영속화 (M3)

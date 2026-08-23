@@ -199,7 +199,7 @@ export function SettingsForm({ initial }: { initial: Profile }) {
       </Section>
 
       <Section
-        description="PDF 뷰어나 음악 앱을 쓰는 동안, 그 앱에서만 필요한 버튼을 뒤에 더 붙입니다. 앞의 네 칸은 어떤 앱에서도 자리가 바뀌지 않습니다."
+        description="Hana Cloud에서 확인한 앱 프로필이 있으면 그 앱에서만 필요한 버튼을 뒤에 더 붙입니다. 앞의 네 칸은 어떤 앱에서도 자리가 바뀌지 않습니다."
         title="앱별 버튼"
       >
         <Toggle
@@ -209,9 +209,9 @@ export function SettingsForm({ initial }: { initial: Profile }) {
           onLabel="앱별 버튼 켜짐"
         />
         <Text color="$caption" typography="body">
-          PDF 뷰어에서는 다음 장·이전 장이, 음악 앱에서는 재생/멈춤·다음 곡·이전
-          곡이 붙습니다. 칸이 늘면 한 바퀴가 길어지므로, 쓰지 않는다면 꺼 두는
-          편이 빠릅니다.
+          기본 프로필에는 PDF 뷰어의 다음 장·이전 장과 음악 앱의 재생/멈춤·다음
+          곡·이전 곡이 있습니다. 칸이 늘면 한 바퀴가 길어지므로, 쓰지 않는다면
+          꺼 두는 편이 빠릅니다.
         </Text>
       </Section>
 

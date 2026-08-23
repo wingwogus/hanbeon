@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::app_registry::Registry;
 use crate::focused_application::{self, FocusedApplication};
 use crate::occlusion::{self, MARGIN};
 use crate::profile::Profile;
@@ -39,7 +40,7 @@ fn log_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("HANBEON_LOG").is_ok())
 }
 
-pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner) {
+pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner, registry: Registry) {
     thread::spawn(move || {
         let mut covered = false;
         let mut source = focused_application::system_source();
@@ -55,10 +56,7 @@ pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner) {
             let ours = is_ours(front.as_ref(), std::process::id() as i32);
 
             if !ours {
-                scanner.apply_preset(
-                    &app,
-                    front.as_ref().and_then(FocusedApplication::macos_bundle_id),
-                );
+                scanner.apply_preset(&app, front.as_ref(), &registry);
             }
 
             let (dim, percent) = profile
