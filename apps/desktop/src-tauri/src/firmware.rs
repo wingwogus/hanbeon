@@ -557,6 +557,42 @@ fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<(), InstallFailure> {
         .ok_or(InstallFailure::Cancelled)
 }
 
+fn upload_with_retry(
+    app: &AppHandle,
+    cli: &Path,
+    candidate: &ArduinoCandidate,
+    output: &Path,
+    cancelled: &AtomicBool,
+) -> Result<(), InstallFailure> {
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        ensure_not_cancelled(cancelled)?;
+        if attempt > 0 {
+            let port = rediscover(candidate, cancelled).ok_or_else(|| {
+                InstallFailure::Upload("업로드 재시도 중 Arduino를 찾지 못했습니다.".to_owned())
+            })?;
+            emit(
+                app,
+                &FirmwareState::Uploading {
+                    device_id: candidate.device_id.clone(),
+                },
+            );
+            let _ = port;
+        }
+        match run_cli(cli, &upload_args(&candidate.port, output)) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = error;
+                log_firmware(&format!(
+                    "[firmware] upload attempt {} failed: {last_error}",
+                    attempt + 1
+                ));
+            }
+        }
+    }
+    Err(InstallFailure::Upload(last_error))
+}
+
 fn install(
     app: &AppHandle,
     device_id: &str,
@@ -588,10 +624,7 @@ fn install(
             device_id: device_id.to_owned(),
         },
     );
-    let upload_port = rediscover(candidate, cancelled)
-        .map(|found| found.port)
-        .unwrap_or_else(|| candidate.port.clone());
-    run_cli(&cli, &upload_args(&upload_port, &output)).map_err(InstallFailure::Upload)?;
+    upload_with_retry(app, &cli, candidate, &output, cancelled)?;
     ensure_not_cancelled(cancelled)?;
     emit(
         app,
