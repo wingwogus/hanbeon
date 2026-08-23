@@ -86,28 +86,27 @@ describe('Arduino firmware lifecycle contract', () => {
     ).toBe('다른 스케치가 설치되어 있습니다')
   })
 
-  test('blocks install until an explicit confirmation token exists', () => {
+  test('allows no-response install without a confirmation token', () => {
     expect(
       canBeginInstall(
         {
           state: 'confirmationRequired',
           deviceId: 'candidate-1',
           reason: 'noResponse',
-        },
-        false,
-      ),
-    ).toBe(false)
-    expect(
-      canBeginInstall(
-        {
-          state: 'confirmationRequired',
-          deviceId: 'candidate-1',
-          reason: 'noResponse',
-          confirmationToken: 'token-1',
         },
         false,
       ),
     ).toBe(true)
+    expect(
+      canBeginInstall(
+        {
+          state: 'confirmationRequired',
+          deviceId: 'candidate-1',
+          reason: 'differentFirmware',
+        },
+        false,
+      ),
+    ).toBe(false)
   })
 
   test('requires a stronger overwrite acknowledgement for different firmware', () => {
@@ -163,7 +162,7 @@ describe('Arduino firmware lifecycle contract', () => {
     })
     await listArduinoCandidates()
     await probeArduinoFirmware('candidate-1')
-    await beginFirmwareInstall('candidate-1', 'token-1')
+    await beginFirmwareInstall('candidate-1')
     await cancelFirmwareInstall()
     expect(invoke.mock.calls.map((call) => call[0])).toEqual([
       FIRMWARE_COMMANDS.listCandidates,
@@ -171,5 +170,13 @@ describe('Arduino firmware lifecycle contract', () => {
       FIRMWARE_COMMANDS.beginInstall,
       FIRMWARE_COMMANDS.cancelInstall,
     ])
+  })
+
+  test('sends snake_case device_id so Tauri command schema accepts the payload', async () => {
+    await beginFirmwareInstall('candidate-1')
+    const last = invoke.mock.calls.at(-1)
+    expect(last?.[0]).toBe(FIRMWARE_COMMANDS.beginInstall)
+    expect(last?.[1]).toEqual({ device_id: 'candidate-1' })
+    expect(last?.[1]).not.toHaveProperty('deviceId')
   })
 })
