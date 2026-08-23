@@ -339,7 +339,7 @@ pub fn list_arduino_candidates(app: AppHandle) -> Result<Vec<ArduinoCandidate>, 
     Ok(found)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 pub fn probe_arduino_firmware(
     app: AppHandle,
@@ -607,7 +607,7 @@ fn install(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 pub fn begin_firmware_install(
     app: AppHandle,

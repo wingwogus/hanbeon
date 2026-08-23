@@ -18,6 +18,7 @@ import {
   FIRMWARE_COMMANDS,
   FIRMWARE_COPY,
   FIRMWARE_EVENT,
+  firmwareDeviceArgs,
   firmwareErrorText,
   firmwareOwnsPort,
   type FirmwareState,
@@ -172,7 +173,12 @@ describe('Arduino firmware lifecycle contract', () => {
     ])
   })
 
-  test('sends snake_case device_id so Tauri command schema accepts the payload', async () => {
+  test('sends both camelCase and snake_case device ids to Tauri commands', async () => {
+    expect(firmwareDeviceArgs('candidate-1')).toEqual({
+      deviceId: 'candidate-1',
+      device_id: 'candidate-1',
+    })
+    expect(() => firmwareDeviceArgs('  ')).toThrow('deviceId is required')
     await beginFirmwareInstall('candidate-1')
     const last = invoke.mock.calls.at(-1)
     expect(last?.[0]).toBe(FIRMWARE_COMMANDS.beginInstall)

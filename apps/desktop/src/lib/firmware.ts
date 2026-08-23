@@ -165,8 +165,12 @@ export function candidateLabel(candidate: ArduinoCandidate): string {
 export const listArduinoCandidates = () =>
   invoke<ArduinoCandidate[]>(FIRMWARE_COMMANDS.listCandidates)
 
-function firmwareDeviceArgs(deviceId: string) {
-  return { deviceId, device_id: deviceId }
+export function firmwareDeviceArgs(deviceId: string) {
+  const id = deviceId.trim()
+  if (!id) {
+    throw new Error('deviceId is required')
+  }
+  return { deviceId: id, device_id: id }
 }
 
 export const probeArduinoFirmware = (deviceId: string) =>
