@@ -32,14 +32,15 @@ export const connectionCopy = (
   connection: ArduinoConnection,
 ): string | null => {
   switch (connection.state) {
+    // 연결 대기·재시도 상태는 소리 없이 진행한다. 오버레이 한 줄이
+    // 바뀔 때마다 칸이 밀려 커서 위치를 다시 찾게 만드는 비용이
+    // 연결 안내의 가치보다 크다(원칙 2). 실패만은 알려야 한다.
     case 'waiting':
-      return '스위치를 연결해 주세요'
     case 'connecting':
-      return '스위치 연결 중'
+    case 'reconnecting':
+      return null
     case 'connected':
       return null
-    case 'reconnecting':
-      return '스위치 다시 찾는 중'
     case 'error':
       return '스위치 연결에 실패했습니다'
   }
