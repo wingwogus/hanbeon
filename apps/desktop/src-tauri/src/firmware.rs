@@ -252,11 +252,30 @@ fn classify_response(response: &[u8]) -> HandshakeClassification {
     }
 }
 
+fn open_probe_port(port: &str) -> Result<Box<dyn serialport::SerialPort>, String> {
+    let mut last_error = None;
+    for _ in 0..8 {
+        match serialport::new(port, BAUD_RATE)
+            .timeout(SERIAL_TIMEOUT)
+            .exclusive(true)
+            .open()
+        {
+            Ok(serial) => return Ok(serial),
+            Err(error) => {
+                let message = format!("{port}: {error}");
+                let busy = message.to_ascii_lowercase().contains("busy") || message.contains("16");
+                last_error = Some(message);
+                if !busy {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| format!("{port}: couldn't open")))
+}
+
 fn probe_port(port: &str) -> Result<HandshakeClassification, String> {
-    let mut serial = serialport::new(port, BAUD_RATE)
-        .timeout(SERIAL_TIMEOUT)
-        .open()
-        .map_err(|error| error.to_string())?;
+    let mut serial = open_probe_port(port)?;
 
     let mut received = Vec::with_capacity(HANDSHAKE_RESPONSE.len());
     for _ in 0..4 {
@@ -271,7 +290,9 @@ fn probe_port(port: &str) -> Result<HandshakeClassification, String> {
                 Ok(_) => {
                     received.push(byte[0]);
                     if byte[0] == b'\n' || received.len() >= HANDSHAKE_RESPONSE.len() {
-                        return Ok(classify_response(&received));
+                        let classified = classify_response(&received);
+                        drop(serial);
+                        return Ok(classified);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::TimedOut => break,
@@ -279,9 +300,12 @@ fn probe_port(port: &str) -> Result<HandshakeClassification, String> {
             }
         }
         if !received.is_empty() {
-            return Ok(classify_response(&received));
+            let classified = classify_response(&received);
+            drop(serial);
+            return Ok(classified);
         }
     }
+    drop(serial);
     Ok(HandshakeClassification::NoResponse)
 }
 
@@ -347,13 +371,13 @@ pub fn probe_arduino_firmware(
     } else {
         InstallerExit::Failure
     });
-    let classification = classification.inspect_err(|_| {
+    let classification = classification.inspect_err(|error| {
         emit(
             &app,
             &FirmwareState::Error {
                 code: "portUnavailable",
                 retryable: true,
-                detail: None,
+                detail: Some(error.clone()),
             },
         );
     })?;
@@ -733,6 +757,19 @@ mod tests {
         assert_eq!(
             classify_response(b"OTHER\n"),
             HandshakeClassification::DifferentFirmware
+        );
+        let busy = probe_port("/dev/does-not-exist-hanbeon");
+        assert!(
+            busy.is_err(),
+            "missing port must not look like a blank sketch"
+        );
+        let message = busy.unwrap_err().to_lowercase();
+        assert!(
+            message.contains("no such file")
+                || message.contains("not found")
+                || message.contains("couldn't open")
+                || message.contains("no such device"),
+            "open failure should keep the OS error: {message}"
         );
 
         let coordinator = ArduinoCoordinator::new(test_support::coordinator_probe_silent);
