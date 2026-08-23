@@ -244,10 +244,7 @@ pub fn run() {
                 if let Some(floating) = app.get_webview_window("floating") {
                     floating.hide()?;
                 }
-                if let Some(settings) = app.get_webview_window("settings") {
-                    settings.show()?;
-                    settings.set_focus()?;
-                }
+                window::show_settings(app.handle())?;
                 arduino::ArduinoCoordinator::for_installer(spawn_switch)
             } else {
                 arduino::ArduinoCoordinator::new(spawn_switch)
