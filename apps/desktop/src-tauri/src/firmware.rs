@@ -320,7 +320,7 @@ pub fn probe_arduino_firmware(
         },
     );
 
-    let ownership = coordinator.acquire_installer().map_err(|_| {
+    let ownership = coordinator.acquire_setup_probe().map_err(|_| {
         emit(
             &app,
             &FirmwareState::Error {

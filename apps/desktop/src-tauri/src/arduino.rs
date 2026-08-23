@@ -423,6 +423,7 @@ impl ArduinoCoordinator {
                 return Ok(InstallerOwnership {
                     inner: Arc::clone(&self.inner),
                     active: true,
+                    restore_connection: true,
                 });
             }
             if state.owner != ArduinoOwner::Connection {
@@ -448,7 +449,25 @@ impl ArduinoCoordinator {
         Ok(InstallerOwnership {
             inner: Arc::clone(&self.inner),
             active: true,
+            restore_connection: true,
         })
+    }
+
+    pub fn acquire_setup_probe(&self) -> Result<InstallerOwnership, CoordinatorError> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.owner == ArduinoOwner::Installer && state.switch.is_none() {
+            return Ok(InstallerOwnership {
+                inner: Arc::clone(&self.inner),
+                active: true,
+                restore_connection: false,
+            });
+        }
+        drop(state);
+        self.acquire_installer()
     }
 }
 
@@ -470,6 +489,7 @@ fn resume_connection(inner: &CoordinatorInner) {
 pub struct InstallerOwnership {
     inner: Arc<CoordinatorInner>,
     active: bool,
+    restore_connection: bool,
 }
 
 impl InstallerOwnership {
@@ -479,13 +499,15 @@ impl InstallerOwnership {
 
     pub fn finish(mut self, _exit: InstallerExit) {
         self.active = false;
-        resume_connection(&self.inner);
+        if self.restore_connection {
+            resume_connection(&self.inner);
+        }
     }
 }
 
 impl Drop for InstallerOwnership {
     fn drop(&mut self) {
-        if self.active {
+        if self.active && self.restore_connection {
             resume_connection(&self.inner);
         }
     }
