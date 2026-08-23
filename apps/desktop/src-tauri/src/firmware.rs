@@ -431,27 +431,6 @@ fn upload_args(port: &str, output: &Path) -> Vec<OsString> {
     ]
 }
 
-fn pulse_bootloader(port: &str) -> Result<(), String> {
-    {
-        let serial = serialport::new(port, 1200)
-            .timeout(Duration::from_millis(100))
-            .exclusive(true)
-            .open()
-            .map_err(|error| format!("{port}: {error}"))?;
-        let mut serial = serial;
-        let _ = serial.write_data_terminal_ready(false);
-        drop(serial);
-    }
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        if Path::new(port).exists() {
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    Ok(())
-}
-
 fn core_install_args() -> Vec<OsString> {
     ["core", "install", "arduino:avr"]
         .into_iter()
@@ -609,8 +588,10 @@ fn install(
             device_id: device_id.to_owned(),
         },
     );
-    pulse_bootloader(&candidate.port).map_err(InstallFailure::Upload)?;
-    run_cli(&cli, &upload_args(&candidate.port, &output)).map_err(InstallFailure::Upload)?;
+    let upload_port = rediscover(candidate, cancelled)
+        .map(|found| found.port)
+        .unwrap_or_else(|| candidate.port.clone());
+    run_cli(&cli, &upload_args(&upload_port, &output)).map_err(InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
     emit(
         app,
