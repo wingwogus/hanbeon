@@ -340,12 +340,14 @@ pub fn list_arduino_candidates(app: AppHandle) -> Result<Vec<ArduinoCandidate>, 
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub fn probe_arduino_firmware(
     app: AppHandle,
-    device_id: String,
+    deviceId: String,
     installer: State<'_, FirmwareInstaller>,
     coordinator: State<'_, ArduinoCoordinator>,
 ) -> Result<FirmwareState, String> {
+    let device_id = deviceId;
     let candidate = find_candidate(&device_id)?;
     emit(
         &app,
@@ -606,12 +608,14 @@ fn install(
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub fn begin_firmware_install(
     app: AppHandle,
-    device_id: String,
+    deviceId: String,
     installer: State<'_, FirmwareInstaller>,
     coordinator: State<'_, ArduinoCoordinator>,
 ) -> Result<(), String> {
+    let device_id = deviceId;
     let candidate = installer.begin(&device_id).inspect_err(|error| {
         log_firmware(&format!(
             "[firmware] install rejected for {device_id}: {error}"

@@ -166,10 +166,10 @@ export const listArduinoCandidates = () =>
   invoke<ArduinoCandidate[]>(FIRMWARE_COMMANDS.listCandidates)
 
 export const probeArduinoFirmware = (deviceId: string) =>
-  invoke<FirmwareState>(FIRMWARE_COMMANDS.probe, { device_id: deviceId })
+  invoke<FirmwareState>(FIRMWARE_COMMANDS.probe, { deviceId })
 
 export const beginFirmwareInstall = (deviceId: string) =>
-  invoke<void>(FIRMWARE_COMMANDS.beginInstall, { device_id: deviceId })
+  invoke<void>(FIRMWARE_COMMANDS.beginInstall, { deviceId })
 
 export const cancelFirmwareInstall = () =>
   invoke<void>(FIRMWARE_COMMANDS.cancelInstall)
