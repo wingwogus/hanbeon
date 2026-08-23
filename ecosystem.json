@@ -1,0 +1,32 @@
+{
+  "apps": [
+    {
+      "name": "admin",
+      "cwd": "/app/apps/admin",
+      "script": "server.js",
+      "args": "start",
+      "env": {
+        "NODE_ENV": "production",
+        "PORT": 3001,
+        "NODE_OPTIONS": "--max-old-space-size=384"
+      },
+      "instances": 1,
+      "exec_mode": "fork",
+      "max_memory_restart": "400M"
+    },
+    {
+      "name": "front",
+      "cwd": "/app/apps/front",
+      "script": "server.js",
+      "args": "start",
+      "env": {
+        "NODE_ENV": "production",
+        "PORT": 3000,
+        "NODE_OPTIONS": "--max-old-space-size=384"
+      },
+      "instances": 1,
+      "exec_mode": "fork",
+      "max_memory_restart": "400M"
+    }
+  ]
+}

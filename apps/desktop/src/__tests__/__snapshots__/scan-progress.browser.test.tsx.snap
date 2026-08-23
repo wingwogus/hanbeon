@@ -1,0 +1,36 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`ScanProgress 순환 중에는 남은 시간만큼 막대가 남는다 1`] = `
+"<div aria-hidden="true" class="background-0-$progressTrack--255 border-color-0-$border--255 border-radius-0-999px--255 border-style-0-solid--255 border-width-0-1px--255 box-sizing-0-border-box--255 flex-shrink-0-0--255 height-0-10px--255 overflow-0-hidden--255 width-0-100%--255">
+  <div class="height-0-100%--255 width-0---255 background-0-$scanCursor--255" style="--width-0-: 100%;">
+  </div>
+</div>"
+`;
+
+exports[`ScanProgress 마감이 지나면 막대가 비어 있다 1`] = `
+"<div aria-hidden="true" class="background-0-$progressTrack--255 border-color-0-$border--255 border-radius-0-999px--255 border-style-0-solid--255 border-width-0-1px--255 box-sizing-0-border-box--255 flex-shrink-0-0--255 height-0-10px--255 overflow-0-hidden--255 width-0-100%--255">
+  <div class="height-0-100%--255 width-0---255 background-0-$scanCursor--255" style="--width-0-: 0%;">
+  </div>
+</div>"
+`;
+
+exports[`ScanProgress 머무름은 순환과 다른 색으로 남은 시간을 센다 1`] = `
+"<div aria-hidden="true" class="background-0-$progressTrack--255 border-color-0-$border--255 border-radius-0-999px--255 border-style-0-solid--255 border-width-0-1px--255 box-sizing-0-border-box--255 flex-shrink-0-0--255 height-0-10px--255 overflow-0-hidden--255 width-0-100%--255">
+  <div class="height-0-100%--255 width-0---255 background-0-$caption--255" style="--width-0-: 100%;">
+  </div>
+</div>"
+`;
+
+exports[`ScanProgress 되돌리기 창에서는 줄어들지 않는다 1`] = `
+"<div aria-hidden="true" class="background-0-$progressTrack--255 border-color-0-$border--255 border-radius-0-999px--255 border-style-0-solid--255 border-width-0-1px--255 box-sizing-0-border-box--255 flex-shrink-0-0--255 height-0-10px--255 overflow-0-hidden--255 width-0-100%--255">
+  <div class="height-0-100%--255 width-0---255 background-0-$warning--255" style="--width-0-: 100%;">
+  </div>
+</div>"
+`;
+
+exports[`ScanProgress 정지 중에는 진행이 없다 1`] = `
+"<div aria-hidden="true" class="background-0-$progressTrack--255 border-color-0-$border--255 border-radius-0-999px--255 border-style-0-solid--255 border-width-0-1px--255 box-sizing-0-border-box--255 flex-shrink-0-0--255 height-0-10px--255 overflow-0-hidden--255 width-0-100%--255">
+  <div class="height-0-100%--255 width-0---255 background-0-$scanCursor--255" style="--width-0-: 0%;">
+  </div>
+</div>"
+`;

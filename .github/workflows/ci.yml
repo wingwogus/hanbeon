@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # 공개 저장소이므로 모든 작업은 GitHub 호스팅 러너에서 돈다.
+  # self-hosted 러너에서 PR 코드를 실행하면 (postinstall, 테스트, 빌드)
+  # 누구든 PR 하나로 우리 인프라에서 임의 코드를 돌릴 수 있다.
+  # 배포는 이 워크플로에 두지 않는다.
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test
+        env:
+          DB_SCHEMA: public
+          DB_URL: localhost
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
+          DB_ID: postgres
+          DB_PW: postgres
+          DB_DB: postgres
+
+      - name: Build
+        run: bun run build
+
+  changepacks:
+    name: changepacks
+    runs-on: ubuntu-latest
+    permissions:
+      # create pull request comments
+      pull-requests: write
+
+      # Actions > General > Workflow permissions for creating pull request
+      # Create brench to create pull request
+      contents: write
+    needs:
+      - check
+    steps:
+      - uses: actions/checkout@v6
+      - uses: changepacks/action@ff3d7d0ddbce5dd21c4db0fc5932493b320cf85e # main
+        id: changepacks
+    outputs:
+      changepacks: ${{ steps.changepacks.outputs.changepacks }}

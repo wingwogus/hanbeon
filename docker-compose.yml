@@ -1,0 +1,58 @@
+services:
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - ${PORT:-80}:80
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      api:
+        condition: service_healthy
+      node:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+  node:
+    build:
+      dockerfile: Dockerfile.front
+    restart: always
+    expose:
+      - 3000
+      - 3001
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q --spider http://node:3000 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  api:
+    build:
+      dockerfile: Dockerfile.api
+    restart: always
+    expose:
+      - 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: apis/api/.env
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q --spider http://api:8000/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 512m

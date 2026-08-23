@@ -1,0 +1,25 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`StatusLine 알릴 것이 없으면 현재 속도를 보여준다 1`] = `
+"<div class="display-0-flex--0 justify-content-0-center--0 align-items-0-center--0 flex-shrink-0-0--255 height-0-22px--255 overflow-0-hidden--255 width-0-100%--255">
+  <span class="overflow-0-hidden--255 text-overflow-0-ellipsis--255 typo-caption white-space-0-nowrap--255 color-0-$caption--255 font-weight-0-400--255">
+    2.5초마다
+  </span>
+</div>"
+`;
+
+exports[`StatusLine 간격이 바뀌면 그 이유를 같은 자리에 띄운다 1`] = `
+"<div class="display-0-flex--0 justify-content-0-center--0 align-items-0-center--0 flex-shrink-0-0--255 height-0-22px--255 overflow-0-hidden--255 width-0-100%--255">
+  <span class="overflow-0-hidden--255 text-overflow-0-ellipsis--255 typo-caption white-space-0-nowrap--255 color-0-$primary--255 font-weight-0-700--255">
+    최근 반응이 빨라져 1.8초 → 1.7초
+  </span>
+</div>"
+`;
+
+exports[`StatusLine 정지 중에는 조정 이유보다 정지 안내가 앞선다 1`] = `
+"<div class="display-0-flex--0 justify-content-0-center--0 align-items-0-center--0 flex-shrink-0-0--255 height-0-22px--255 overflow-0-hidden--255 width-0-100%--255">
+  <span class="overflow-0-hidden--255 text-overflow-0-ellipsis--255 typo-caption white-space-0-nowrap--255 color-0-$warning--255 font-weight-0-700--255">
+    일시정지 — 길게 눌러 다시 시작
+  </span>
+</div>"
+`;

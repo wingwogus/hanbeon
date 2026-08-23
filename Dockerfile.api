@@ -1,0 +1,6 @@
+FROM alpine
+WORKDIR /app
+COPY api.tar.gz ./api.tar.gz
+RUN tar -xzf api.tar.gz && rm -f api.tar.gz
+EXPOSE 8000
+CMD ["./api"]

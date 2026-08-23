@@ -1,0 +1,16 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+vespera = "0.1.51"
+tokio = { version = "1.52", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+sea-orm = { version = "2.0.0-rc.38", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite", "macros", "chrono", "uuid"] }
+vespertide = "0.1.61"
+
+[build-dependencies]
+vespera = "0.1.51"

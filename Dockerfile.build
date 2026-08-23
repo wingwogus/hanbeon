@@ -1,0 +1,78 @@
+# Multi-stage build for Next.js applications
+FROM oven/bun:alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+# RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Copy package files first for better caching
+COPY package.json bun.lock ./
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/front/package.json ./apps/front/
+
+# Install dependencies
+RUN bun install --ignore-scripts
+
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/package.json /app/bun.lock ./
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/admin/node_modules ./apps/admin/node_modules
+COPY --from=deps /app/apps/front/node_modules ./apps/front/node_modules
+COPY apps/admin ./apps/admin
+COPY apps/front ./apps/front
+RUN bun run build
+
+# Production image, copy all the files and run next
+FROM base AS front-builder
+WORKDIR /app
+
+# Create ecosystem file
+COPY ecosystem.json ./ecosystem.json
+
+COPY --from=builder /app/apps/admin/.next/standalone/node_modules /app/node_modules/
+COPY --from=builder /app/apps/front/.next/standalone/node_modules /app/node_modules/
+COPY --from=builder /app/apps/admin/public /app/apps/admin/public
+COPY --from=builder /app/apps/front/public /app/apps/front/public
+
+WORKDIR /app/apps/admin
+COPY --from=builder /app/apps/admin/.next/standalone/apps/admin ./
+COPY --from=builder /app/apps/admin/.next/static ./.next/static
+
+WORKDIR /app/apps/front
+COPY --from=builder /app/apps/front/.next/standalone/apps/front ./
+COPY --from=builder /app/apps/front/.next/static ./.next/static
+
+WORKDIR /app
+
+RUN tar --exclude='.git' --exclude='.github' --exclude='.gitignore' -czf front.tar.gz .
+
+FROM rust:1.93-alpine AS api-builder
+RUN apk add --no-cache musl-dev
+WORKDIR /app
+
+# Copy dependency files first for better caching
+COPY Cargo.lock Cargo.toml ./
+COPY apis/api/Cargo.toml ./apis/api/
+
+# Build dependencies only (this layer will be cached if dependencies don't change)
+RUN mkdir -p apis/api/src && \
+    echo "fn main() {}" > apis/api/src/main.rs && \
+    cargo build --release && \
+    rm -rf apis/api/src
+
+# Copy actual source code
+COPY apis/api ./apis/api
+
+# Build the actual application (only rebuilds if source changed)
+RUN cargo build --release
+
+RUN tar -czf api.tar.gz -C /app/target/release api
+
+FROM alpine AS result
+WORKDIR /app
+COPY --from=front-builder /app/front.tar.gz ./front.tar.gz
+COPY --from=api-builder /app/api.tar.gz ./api.tar.gz

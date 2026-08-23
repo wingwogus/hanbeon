@@ -1,0 +1,27 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 1420",
+    "build": "next build",
+    "tauri": "tauri",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@devup-ui/react": "^1",
+    "@devup-ui/reset-css": "^1",
+    "@tauri-apps/api": "^2",
+    "next": "^16",
+    "react": "^19"
+  },
+  "devDependencies": {
+    "@devup-ui/next-plugin": "^1",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^25",
+    "@types/react": "^19",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "typescript": "^6"
+  }
+}
