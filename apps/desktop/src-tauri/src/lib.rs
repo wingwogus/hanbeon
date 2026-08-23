@@ -10,6 +10,7 @@ mod adapt;
 pub mod arduino;
 mod audio;
 mod emit;
+pub mod focused_application;
 mod foreground;
 mod input;
 mod journal;

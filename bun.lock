@@ -4,7 +4,7 @@
   "workspaces": {
     "": {
       "devDependencies": {
-        "@devup-ui/bun-plugin": "^1.0",
+        "@devup-ui/bun-plugin": "^1.0.12",
         "@types/bun": "^1.3",
         "bun-test-env-dom": "^1.0",
         "eslint-plugin-devup": "^2.0.19",
@@ -86,19 +86,19 @@
 
     "@babel/types": ["@babel/types@7.29.0", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A=="],
 
-    "@devup-ui/bun-plugin": ["@devup-ui/bun-plugin@1.0.7", "", { "dependencies": { "@devup-ui/plugin-utils": "^1.0.4", "@devup-ui/wasm": "^1.0.68" } }, "sha512-Sd3jeZ1swtAL+wf1STTW+Ay60jbZ9emWIJhnXfUK9+A/h+LLqiMpu9fI+m8IXxKM+5ijDF12lcrN+Vm3rT4o/g=="],
+    "@devup-ui/bun-plugin": ["@devup-ui/bun-plugin@1.0.12", "", { "dependencies": { "@devup-ui/plugin-utils": "^1.0.8", "@devup-ui/wasm": "^1.0.75" } }, "sha512-V5eJqpy3oFinm0TZfnD7hBQsMBh1vfSM9Kb/cOwmXQUrqV+YKv8ThA/nUKS7zKGMJhaafAbKJeLtALEnR2ZE1Q=="],
 
     "@devup-ui/eslint-plugin": ["@devup-ui/eslint-plugin@1.0.14", "", { "dependencies": { "@typescript-eslint/utils": "^8.57", "typescript-eslint": "^8.57" } }, "sha512-HLoIDIHgUsEJ4z8a0VGMx48DYIKfnv/jZPIQWFlK6s67n6x+R33loY+5O/mggbIDntGY2lknGTKFfKgD4hahPQ=="],
 
     "@devup-ui/next-plugin": ["@devup-ui/next-plugin@1.0.74", "", { "dependencies": { "@devup-ui/plugin-utils": "^1.0.4", "@devup-ui/wasm": "^1.0.68", "@devup-ui/webpack-plugin": "^1.0.58" }, "peerDependencies": { "next": "*" } }, "sha512-GU2tz7RNZchnlzVxfXB7Sp2AMd/k3mjUyW/Tf6tDqhYgavYUz06DCV7lz4uojsMe/e1Q62IpwONINXicFBCH8Q=="],
 
-    "@devup-ui/plugin-utils": ["@devup-ui/plugin-utils@1.0.4", "", {}, "sha512-zAWxUawHphhzdcouy1vTVVkief0C7poCnDToxxQ4/rg9IGumIqmox7lSDRi579145qcd1jEH90uElCC0LpUiDA=="],
+    "@devup-ui/plugin-utils": ["@devup-ui/plugin-utils@1.0.10", "", {}, "sha512-jA8RDae2BXAN0Xsm0JPG7NZvlwsf8iRP2q1Do9G5V9zKZ5mO+qGUd/MVvYc8Xk4A6Av+OsPHDnctdyXC7VBXQw=="],
 
     "@devup-ui/react": ["@devup-ui/react@1.0.35", "", { "dependencies": { "csstype-extra": "latest", "react": "^19.2" } }, "sha512-OrgmKxziAkUgtVuZQX9I+pfKT/Fwa33JSqVUORJ171jqjjyLXGqtCyXsBvJVWfI4dmorMkJXJFVV7hh2ceJPNg=="],
 
     "@devup-ui/reset-css": ["@devup-ui/reset-css@1.0.23", "", { "dependencies": { "@devup-ui/react": "^1.0.35" } }, "sha512-tJ+YKODanxR6hIHBAMK8Ldwsw7bHR3djrnL0GBtAZ0B6VDOytuFa2XgsD+Jj+VSR3PQLoDBQSbClmgm5l17dTQ=="],
 
-    "@devup-ui/wasm": ["@devup-ui/wasm@1.0.72", "", {}, "sha512-hrnTY9cyTLDt8LMqWTRYG5eMs+7CGyaHObi4onA5TiCtmicb4/NWOM6THL4A0d4f5EzC6WzRDuobSMm+2wiIxA=="],
+    "@devup-ui/wasm": ["@devup-ui/wasm@1.0.75", "", {}, "sha512-MqANK1YxKqrYYxpFN8jb89nVzbLOGrlgh/oshfCwm9VaMFdx6qbWxAETlkHkXmkOp5UAhFOlgJbFLVm0MT1t2g=="],
 
     "@devup-ui/webpack-plugin": ["@devup-ui/webpack-plugin@1.0.58", "", { "dependencies": { "@devup-ui/plugin-utils": "^1.0.4", "@devup-ui/wasm": "^1.0.68" } }, "sha512-JrQQd3p0kQ1kASL5E783OsfXLdzh4Aaiugy1901wN7enF7fcKvZthIxDMd3ionLDXym4ZAb+l0QnRFKlMW2Gcg=="],
 
@@ -1113,6 +1113,14 @@
     "zod-validation-error": ["zod-validation-error@4.0.2", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-Q6/nZLe6jxuU80qb/4uJ4t5v2VEZ44lzQjPDhYJNztRQ4wyWc6VF3D3Kb/fAuPetZQnhS3hnajCf9CsWesghLQ=="],
 
     "zwitch": ["zwitch@2.0.4", "", {}, "sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A=="],
+
+    "@devup-ui/next-plugin/@devup-ui/plugin-utils": ["@devup-ui/plugin-utils@1.0.4", "", {}, "sha512-zAWxUawHphhzdcouy1vTVVkief0C7poCnDToxxQ4/rg9IGumIqmox7lSDRi579145qcd1jEH90uElCC0LpUiDA=="],
+
+    "@devup-ui/next-plugin/@devup-ui/wasm": ["@devup-ui/wasm@1.0.72", "", {}, "sha512-hrnTY9cyTLDt8LMqWTRYG5eMs+7CGyaHObi4onA5TiCtmicb4/NWOM6THL4A0d4f5EzC6WzRDuobSMm+2wiIxA=="],
+
+    "@devup-ui/webpack-plugin/@devup-ui/plugin-utils": ["@devup-ui/plugin-utils@1.0.4", "", {}, "sha512-zAWxUawHphhzdcouy1vTVVkief0C7poCnDToxxQ4/rg9IGumIqmox7lSDRi579145qcd1jEH90uElCC0LpUiDA=="],
+
+    "@devup-ui/webpack-plugin/@devup-ui/wasm": ["@devup-ui/wasm@1.0.72", "", {}, "sha512-hrnTY9cyTLDt8LMqWTRYG5eMs+7CGyaHObi4onA5TiCtmicb4/NWOM6THL4A0d4f5EzC6WzRDuobSMm+2wiIxA=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 

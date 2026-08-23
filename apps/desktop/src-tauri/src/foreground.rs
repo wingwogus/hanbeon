@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::focused_application::{self, FocusedApplication};
 use crate::occlusion::{self, MARGIN};
 use crate::profile::Profile;
 use crate::scan::Scanner;
@@ -33,30 +34,6 @@ struct CoverPayload {
     percent: u8,
 }
 
-/// 지금 앞에 있는 앱.
-struct Frontmost {
-    pid: i32,
-    bundle_id: Option<String>,
-}
-
-#[cfg(target_os = "macos")]
-fn frontmost() -> Option<Frontmost> {
-    use objc2_app_kit::NSWorkspace;
-
-    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
-    Some(Frontmost {
-        pid: app.processIdentifier(),
-        bundle_id: app.bundleIdentifier().map(|id| id.to_string()),
-    })
-}
-
-/// Windows는 아직 활성 앱을 읽지 않는다. 앱별 칸이 붙지 않고 가림 판정도
-/// 하지 않을 뿐, 앞 4칸은 그대로 동작한다.
-#[cfg(not(target_os = "macos"))]
-fn frontmost() -> Option<Frontmost> {
-    None
-}
-
 fn log_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("HANBEON_LOG").is_ok())
@@ -65,23 +42,22 @@ fn log_enabled() -> bool {
 pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner) {
     thread::spawn(move || {
         let mut covered = false;
+        let mut source = focused_application::system_source();
 
         loop {
             thread::sleep(POLL);
 
-            let front = frontmost();
+            let front = source.current();
 
             // 우리 자신이 앞에 있는 경우(설정 창을 열었을 때)는 둘 다 건너뛴다.
             // 포커스 요소로 우리 웹뷰가 잡혀 창이 자기 자신을 가린다고 판정되고,
             // 스캔 대상도 설정 창을 여닫을 때마다 두 번씩 바뀐다.
-            let ours = front
-                .as_ref()
-                .is_some_and(|front| front.pid == std::process::id() as i32);
+            let ours = is_ours(front.as_ref(), std::process::id() as i32);
 
             if !ours {
                 scanner.apply_preset(
                     &app,
-                    front.as_ref().and_then(|front| front.bundle_id.as_deref()),
+                    front.as_ref().and_then(FocusedApplication::macos_bundle_id),
                 );
             }
 
@@ -97,7 +73,8 @@ pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner) {
                     .and_then(occlusion::window_rect);
                 let element = front
                     .as_ref()
-                    .and_then(|front| occlusion::focused_element_rect(front.pid));
+                    .and_then(FocusedApplication::pid)
+                    .and_then(occlusion::focused_element_rect);
 
                 let verdict = match (window, element) {
                     (Some(window), Some(element)) => window.overlaps(&element, MARGIN),
@@ -122,4 +99,22 @@ pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner) {
             }
         }
     });
+}
+
+fn is_ours(front: Option<&FocusedApplication>, own_pid: i32) -> bool {
+    front.and_then(FocusedApplication::pid) == Some(own_pid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::focused_application::FocusedApplication;
+
+    #[test]
+    fn own_focused_application_is_ignored() {
+        let front = FocusedApplication::macos(42, Some("devfive.hanbeon".into()));
+        assert!(is_ours(Some(&front), 42));
+        assert!(!is_ours(Some(&front), 7));
+        assert!(!is_ours(None, 42));
+    }
 }

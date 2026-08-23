@@ -258,13 +258,28 @@ API로 읽는다. 두 가지를 모르면 시간을 크게 버린다.
 
 ## 플랫폼 범위
 
-MVP는 **macOS + Windows**다.
+MVP 데스크톱 범위는 Tauri의 크로스플랫폼 대상인 **macOS + Windows + Linux**다.
+
+### 앞에 있는 앱 식별
+
+Wave 2에서는 플랫폼별 활성 앱 조회를 하나의 경계로 분리해 다음의 **원시 식별자**를
+읽는다.
+
+- macOS: bundle ID
+- Windows: 전체 경로가 아닌 실행 파일 basename
+- Linux X11: desktop ID와 `WM_CLASS` 값
+
+Wayland에서 안전한 compositor/desktop 어댑터가 없으면 활성 앱 식별을 추측하지 않고
+`None`으로 둔다. 이때 앱별 프리셋은 선택하지 않으며 기본 4칸만 유지한다.
+
+Windows와 Linux X11에서 읽은 원시 식별자를 프리셋으로 인식·적용하는 일, 그리고
+레지스트리 다운로드·캐싱은 Wave 2 범위가 아니다. 별도 검토 Wave에서 다룬다.
 
 iOS/iPadOS는 서드파티 앱이 전역 키 입력 주입이나 시스템 오버레이를 할 수 없어,
 '앱이 다른 앱을 제어'하는 구조 자체가 OS 정책상 불가능하다. 태블릿은 하드웨어
 스위치를 BT HID로 붙여 OS 내장 '스위치 제어'와 연동하고, 우리 앱은 설정·프로필
 제공에 한정한다. **이 제약을 우회하는 방법을 찾으려 시도하지 않는다.**
-Android(AccessibilityService + 오버레이)와 Linux는 MVP 이후 과제다.
+Android(AccessibilityService + 오버레이)는 MVP 이후 과제다.
 
 ## 하지 말 것
 
