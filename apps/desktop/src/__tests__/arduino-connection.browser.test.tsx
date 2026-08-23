@@ -27,7 +27,7 @@ const SNAPSHOT = {
   remainingMs: 1800,
 }
 
-const LIFECYCLE: ReadonlyArray<ArduinoConnection> = [
+const LIFECYCLE: ArduinoConnection[] = [
   { state: 'waiting' },
   { state: 'connecting', port: 'port-a' },
   { state: 'connected', port: 'port-b' },
@@ -203,11 +203,11 @@ describe('Arduino connection lifecycle page boundary', () => {
     globalThis.setTimeout = ((callback: TimerHandler) => {
       if (typeof callback === 'function') callback()
       return 0 as unknown as ReturnType<typeof setTimeout>
-    }) as typeof setTimeout
+    }) as unknown as typeof setTimeout
     globalThis.setInterval = ((callback: TimerHandler) => {
-      if (typeof callback === 'function') intervalTicks = callback
+      if (typeof callback === 'function') intervalTicks = () => callback()
       return 0 as unknown as ReturnType<typeof setInterval>
-    }) as typeof setInterval
+    }) as unknown as typeof setInterval
     HTMLElement.prototype.focus = focus
   })
 
