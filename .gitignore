@@ -4,13 +4,6 @@ node_modules
 .env
 .env.*
 !.env.example
-schema.d.ts
-!apps/*/schema.d.ts
-
-apis/*
-!apis/*/
-apps/*
-!apps/*/
 
 # Terraform/OpenTofu
 .terraform/

@@ -9,13 +9,11 @@
 
 ## 구성
 
-| 경로                     | 설명                                                            |
-| ------------------------ | --------------------------------------------------------------- |
-| `apps/desktop`           | Tauri 데스크톱 앱. 화면에 상시 떠 있는 floating 스위치 컨트롤러 |
-| `apps/desktop/src-tauri` | Rust 코어. 스위치 입력 수신, 스캔 엔진, 전역 키 주입            |
-| `apps/front`             | 랜딩·사용설명서 웹                                              |
-| `apps/admin`             | 실증 로그·정량 지표 대시보드                                    |
-| `apis/api`               | 사용자 프로필 동기화 API (Rust / vespera)                       |
+| 경로                     | 설명                                                               |
+| ------------------------ | ------------------------------------------------------------------ |
+| `apps/desktop`           | Tauri 데스크톱 앱. 화면에 상시 떠 있는 floating 스위치 컨트롤러    |
+| `apps/desktop/src-tauri` | Rust 코어. 스위치 입력 수신, 스캔 엔진, 전역 키 주입               |
+| `apps/admin`             | 로컬 실증 로그 분석 화면과 `summary` CLI                           |
 
 ## 사전 요구사항
 
@@ -38,8 +36,8 @@ macOS는 Xcode Command Line Tools, Windows는 Microsoft C++ Build Tools와 WebVi
 bun install
 
 bun run desktop        # Tauri 앱 개발 모드
-bun run api            # 프로필 동기화 API
-bun run dev            # front / admin 웹
+bun run admin          # 로컬 실증 기록 분석 화면
+bun run summary        # 실증 기록을 터미널에서 요약
 ```
 
 ### Arduino Uno 스위치
@@ -50,7 +48,7 @@ bun run dev            # front / admin 웹
 bun run desktop
 ```
 
-Python 브리지나 터미널 키 합성은 사용자 설정이 아닙니다. 개발 진단용 절차는 아래 개발용 환경변수와 브리지 README에 있습니다.
+Python 브리지나 터미널 키 합성은 사용자 설정이 아닙니다. 개발 진단에는 아래 환경변수를 사용합니다.
 
 손쉬운 사용 권한은 **다른 앱에 키를 넣을 때**만 필요합니다. Uno를 찾고 버튼을 읽는 경로에는 필요하지 않습니다.
 
@@ -114,7 +112,7 @@ bun run test           # bun test + cargo tarpaulin
 
 ## 배포
 
-기본적으로 docker compose로 작동되게 설계됨 (웹·API 한정). 데스크톱 앱은 `bun run desktop:build`로 플랫폼별 번들을 생성합니다.
+데스크톱 앱은 `bun run desktop:build`로 플랫폼별 번들을 생성합니다. 실증 기록 분석 화면은 `bun run admin`으로 로컬에서 실행하며 서버 배포를 전제로 하지 않습니다.
 
 배포는 CI에 두지 않습니다. `.github/workflows/ci.yml`은 lint·test·build 검사만 하며 GitHub 호스팅 러너에서 돕니다.
 

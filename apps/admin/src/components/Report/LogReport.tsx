@@ -29,7 +29,7 @@ const clock = (iso: string) =>
  *
  * 파일은 **브라우저 안에서만** 읽는다. 서버로 올리지 않는다 — 실증 참여자의
  * 동의 없이 기록을 밖으로 내보내지 않는다는 것이 PRD 10.1의 약속이고,
- * 대시보드라고 예외일 이유가 없다.
+ * 로컬 리포트라고 예외일 이유가 없다.
  */
 export function LogReport() {
   const [text, setText] = useState('')

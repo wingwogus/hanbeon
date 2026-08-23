@@ -51,14 +51,12 @@ apps/desktop/          Tauri 앱 — 이 프로젝트의 본체
   src-tauri/           Rust 코어
     src/lib.rs         엔트리, Tauri 커맨드
     src/window.rs      floating 창 배치, non-activating 처리
-apps/front/            랜딩·사용설명서 웹 (Next.js)
-apps/admin/            실증 로그·정량 지표 대시보드 (Next.js)
-apis/api/              사용자 프로필 동기화 API (Rust / vespera / sea-orm)
+apps/admin/            로컬 실증 로그 분석 화면과 summary CLI (Next.js)
 docs/PRD.md            제품 요구사항
 ```
 
-Bun 워크스페이스(`apps/*`) + Cargo 워크스페이스(`apis/api`, `apps/desktop/src-tauri`)가
-한 레포에 겹쳐 있다. Rust 빌드 산출물은 루트 `/target`에 모인다.
+Bun 워크스페이스(`apps/*`)와 데스크톱 Rust 크레이트가 한 레포에 겹쳐 있다.
+Rust 빌드 산출물은 루트 `/target`에 모인다.
 
 ## 명령어
 
@@ -66,8 +64,7 @@ Bun 워크스페이스(`apps/*`) + Cargo 워크스페이스(`apis/api`, `apps/de
 bun install
 bun run desktop         # Tauri 개발 모드 (프론트 dev 서버까지 함께 뜬다)
 bun run desktop:build   # 플랫폼 번들
-bun run api             # 프로필 동기화 API
-bun run dev             # front / admin 웹
+bun run admin           # 로컬 실증 기록 분석 화면
 
 bun run summary         # 실증 기록을 지표로 접어 출력 (기본: OS 로그 폴더)
 bun run summary <파일|폴더> [--json]
@@ -102,7 +99,7 @@ bun run test            # bun test + cargo tarpaulin
 ### 글꼴
 
 Tauri 앱은 오프라인에서 동작해야 한다. **CDN 폰트·외부 이미지·런타임 네트워크
-의존을 프론트에 넣지 않는다.** (`apps/front`, `apps/admin`은 웹이므로 예외)
+의존을 프론트에 넣지 않는다.** (`apps/admin`은 로컬 웹 도구이므로 예외)
 
 그래서 Pretendard를 `apps/desktop/public/fonts/`에 넣어 함께 배포하고,
 `app/layout.tsx`의 `globalCss`에서 `@font-face`로 등록한다. `@font-face`는 객체가
@@ -222,7 +219,7 @@ API로 읽는다. 두 가지를 모르면 시간을 크게 버린다.
 - 사건에 코어의 타입을 그대로 넣지 않는다. 타입이 바뀌면 지난 기록을 읽을 수
   없게 된다 — 문자열·숫자로만 적는다.
 - 지표 계산은 `apps/admin/src/lib/metrics.ts` **한 곳**에 둔다. CLI(`bun run
-  summary`)와 대시보드(`/dashboard`)가 같은 함수를 쓴다 — 계산이 두 벌이 되면
+  summary`)와 로컬 분석 화면(`/`)이 같은 함수를 쓴다 — 계산이 두 벌이 되면
   화면의 숫자와 보고서의 숫자가 갈린다.
 - 대시보드는 기록 파일을 **브라우저 안에서만** 읽는다. 업로드 경로를 만들지
   않는다.
@@ -285,7 +282,7 @@ Android(AccessibilityService + 오버레이)와 Linux는 MVP 이후 과제다.
 | 담당   | 영역                                                                  |
 | ------ | --------------------------------------------------------------------- |
 | 오정민 | 기획·접근성 실증, 요구사항, QA·정량 지표, 통합 검수                   |
-| 우수연 | 소프트웨어 — Rust 코어(스캔·입력 판정·키 주입), 데스크톱 UI, 프로필 API |
+| 우수연 | 소프트웨어 — Rust 코어(스캔·입력 판정·키 주입), 데스크톱 UI              |
 | 이태현 | 하드웨어 — 대형 스위치·하우징, 펌웨어, USB/BT HID 연결                |
 
 세 명이라 한 사람이 여러 층을 본다. **소프트웨어와 하드웨어의 경계에서만

@@ -1,7 +1,6 @@
 import { globalCss, ThemeScript } from '@devup-ui/react'
 import { resetCss } from '@devup-ui/reset-css'
-
-import { Provider } from './provider'
+import type { Metadata } from 'next'
 
 resetCss()
 globalCss({
@@ -9,6 +8,11 @@ globalCss({
     fontFamily: 'Pretendard',
   },
 })
+
+export const metadata: Metadata = {
+  description: '한번 데스크톱 앱이 남긴 실증 기록을 기기 안에서 분석합니다.',
+  title: '한번 실증 기록',
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -20,9 +24,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         />
         <ThemeScript />
       </head>
-      <body>
-        <Provider>{children}</Provider>
-      </body>
+      <body>{children}</body>
     </html>
   )
 }
