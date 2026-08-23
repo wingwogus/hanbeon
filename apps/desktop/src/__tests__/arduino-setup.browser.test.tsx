@@ -320,7 +320,7 @@ describe('Arduino firmware setup screens', () => {
     })
     expect(commands.at(-1)).toEqual({
       name: FIRMWARE_COMMANDS.probe,
-      args: { deviceId: 'candidate-2' },
+      args: { deviceId: 'candidate-2', device_id: 'candidate-2' },
     })
     expect(
       commands.some(
@@ -347,7 +347,7 @@ describe('Arduino firmware setup screens', () => {
 
     expect(commands.at(-1)).toEqual({
       name: FIRMWARE_COMMANDS.probe,
-      args: { deviceId: 'candidate-1' },
+      args: { deviceId: 'candidate-1', device_id: 'candidate-1' },
     })
     expect(textOf(view.container)).toInclude(
       '펌웨어 설치 중 문제가 발생했습니다',

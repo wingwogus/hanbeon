@@ -176,7 +176,9 @@ describe('Arduino firmware lifecycle contract', () => {
     await beginFirmwareInstall('candidate-1')
     const last = invoke.mock.calls.at(-1)
     expect(last?.[0]).toBe(FIRMWARE_COMMANDS.beginInstall)
-    expect(last?.[1]).toEqual({ deviceId: 'candidate-1' })
-    expect(last?.[1]).not.toHaveProperty('device_id')
+    expect(last?.[1]).toEqual({
+      deviceId: 'candidate-1',
+      device_id: 'candidate-1',
+    })
   })
 })
