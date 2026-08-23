@@ -389,6 +389,21 @@ impl ArduinoCoordinator {
         }
     }
 
+    pub fn for_installer<F>(spawn_switch: F) -> Self
+    where
+        F: Fn() -> ArduinoSwitch + Send + Sync + 'static,
+    {
+        Self {
+            inner: Arc::new(CoordinatorInner {
+                state: Mutex::new(CoordinatorState {
+                    owner: ArduinoOwner::Installer,
+                    switch: None,
+                }),
+                spawn_switch: Box::new(spawn_switch),
+            }),
+        }
+    }
+
     pub fn owner(&self) -> ArduinoOwner {
         self.inner
             .state
@@ -404,6 +419,12 @@ impl ArduinoCoordinator {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.owner == ArduinoOwner::Installer && state.switch.is_none() {
+                return Ok(InstallerOwnership {
+                    inner: Arc::clone(&self.inner),
+                    active: true,
+                });
+            }
             if state.owner != ArduinoOwner::Connection {
                 return Err(CoordinatorError::InstallerActive);
             }

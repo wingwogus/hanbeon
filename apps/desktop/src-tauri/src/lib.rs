@@ -146,6 +146,11 @@ pub fn run() {
                 profile.sanitize();
             }
 
+            let arduino_startup = firmware::startup_mode();
+            if arduino_startup == firmware::StartupMode::Setup {
+                profile.onboarded = false;
+            }
+
             // 창 배치는 프로필을 읽은 다음이어야 한다. 사용자가 옮겨 둔 위치를
             // 모른 채 먼저 띄우면 기본 위치에서 한 번 튄 뒤에 제자리를 찾는다.
             if let Some(floating) = app.get_webview_window("floating") {
@@ -205,7 +210,7 @@ pub fn run() {
             let native_app = app.handle().clone();
             let native_detector = Arc::clone(&detector);
             let native_scanner = scanner.clone();
-            let native_switch = arduino::ArduinoCoordinator::new(move || {
+            let spawn_switch = move || {
                 let lifecycle_app = native_app.clone();
                 let switch_app = native_app.clone();
                 let switch_detector = Arc::clone(&native_detector);
@@ -234,7 +239,19 @@ pub fn run() {
                         );
                     },
                 )
-            });
+            };
+            let native_switch = if arduino_startup == firmware::StartupMode::Setup {
+                if let Some(floating) = app.get_webview_window("floating") {
+                    floating.hide()?;
+                }
+                if let Some(settings) = app.get_webview_window("settings") {
+                    settings.show()?;
+                    settings.set_focus()?;
+                }
+                arduino::ArduinoCoordinator::for_installer(spawn_switch)
+            } else {
+                arduino::ArduinoCoordinator::new(spawn_switch)
+            };
             app.manage(native_switch);
             app.manage(firmware::FirmwareInstaller::default());
 

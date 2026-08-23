@@ -89,6 +89,34 @@ enum HandshakeClassification {
     DifferentFirmware,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartupMode {
+    Connect,
+    Setup,
+}
+
+fn startup_mode_for(handshakes: impl IntoIterator<Item = HandshakeClassification>) -> StartupMode {
+    let mut found = false;
+    for handshake in handshakes {
+        found = true;
+        if handshake == HandshakeClassification::Installed {
+            return StartupMode::Connect;
+        }
+    }
+    if found {
+        StartupMode::Setup
+    } else {
+        StartupMode::Connect
+    }
+}
+
+pub fn startup_mode() -> StartupMode {
+    let supported = candidates().unwrap_or_default();
+    startup_mode_for(supported.iter().map(|candidate| {
+        probe_port(&candidate.port).unwrap_or(HandshakeClassification::NoResponse)
+    }))
+}
+
 #[derive(Clone, Debug)]
 struct Confirmation {
     device_id: String,
@@ -361,6 +389,13 @@ fn upload_args(port: &str, output: &Path) -> Vec<OsString> {
     ]
 }
 
+fn core_install_args() -> Vec<OsString> {
+    ["core", "install", "arduino:avr"]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+}
+
 fn bundled_cli() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let name = if cfg!(windows) {
@@ -431,6 +466,8 @@ fn install(
     fs::create_dir_all(&output).map_err(|_| InstallFailure::Upload)?;
     let cli = bundled_cli().map_err(|_| InstallFailure::Upload)?;
 
+    ensure_not_cancelled(cancelled)?;
+    run_cli(&cli, &core_install_args()).map_err(|_| InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
     run_cli(&cli, &compile_args(&source, &output)).map_err(|_| InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
@@ -558,11 +595,13 @@ mod tests {
     fn cli_arguments_are_structured_for_uno_compile_and_upload() {
         let compile = compile_args(Path::new("fixture"), Path::new("build"));
         let upload = upload_args("COM7", Path::new("build"));
+        let core_install = core_install_args();
         let strings = |args: &[OsString]| {
             args.iter()
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
         };
+        assert_eq!(strings(&core_install), ["core", "install", "arduino:avr"]);
         assert_eq!(
             strings(&compile),
             [
@@ -606,5 +645,26 @@ mod tests {
             assert_eq!(coordinator.owner(), ArduinoOwner::Installer);
         }
         assert_eq!(coordinator.owner(), ArduinoOwner::Connection);
+    }
+
+    #[test]
+    fn startup_mode_opens_setup_for_supported_uno_without_hanbeon_firmware() {
+        assert_eq!(
+            startup_mode_for([]),
+            StartupMode::Connect,
+            "no Uno keeps normal discovery active"
+        );
+        assert_eq!(
+            startup_mode_for([HandshakeClassification::Installed]),
+            StartupMode::Connect
+        );
+        assert_eq!(
+            startup_mode_for([HandshakeClassification::NoResponse]),
+            StartupMode::Setup
+        );
+        assert_eq!(
+            startup_mode_for([HandshakeClassification::DifferentFirmware]),
+            StartupMode::Setup
+        );
     }
 }
