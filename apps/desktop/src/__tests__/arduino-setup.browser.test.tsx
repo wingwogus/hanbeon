@@ -169,6 +169,7 @@ mock.module('@/lib/profile', () => ({
     commands.push({ name: 'save_profile', args: { next: profile } })
     return Promise.reject(new Error('save unavailable'))
   },
+  closeSettings: () => Promise.resolve(),
 }))
 
 function emit(event: string, payload: unknown) {

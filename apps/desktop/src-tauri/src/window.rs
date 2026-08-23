@@ -200,6 +200,13 @@ impl MoveWatch {
         }
     }
 
+    /// 마지막으로 기록된 위치가 있으면 돌려준다. 저장 조건(멎음 여부)은
+    /// 보지 않는다. show_floating은 창을 다시 띄울 때 마지막 위치만 필요하다.
+    pub fn last(&self) -> Option<(i32, i32)> {
+        let slot = self.0.lock().ok()?;
+        slot.map(|(_, position)| position)
+    }
+
     /// 이동이 멎었으면 마지막 위치를 꺼낸다.
     fn take_settled(&self) -> Option<(i32, i32)> {
         let mut slot = self.0.lock().ok()?;
@@ -273,5 +280,20 @@ pub fn hide_settings(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+    Ok(())
+}
+
+/// floating 오버레이를 다시 띄운다. 설치 모드에서 숨긴 floating을 온보딩
+/// 종료 직후 되살려 스캔 컨트롤러가 바로 보이도록 하는 것이 존재 이유다.
+pub fn show_floating(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("floating")
+        .ok_or_else(|| "floating 창을 찾을 수 없습니다.".to_string())?;
+    if let Some(moves) = app.try_state::<MoveWatch>() {
+        let saved = moves.last();
+        prepare_floating(&window, saved).map_err(|e| e.to_string())?;
+    }
+    window.show().map_err(|e| e.to_string())?;
+    release_activation(app);
     Ok(())
 }

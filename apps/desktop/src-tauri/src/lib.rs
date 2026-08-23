@@ -125,7 +125,10 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn close_settings(app: AppHandle) -> Result<(), String> {
-    window::hide_settings(&app)
+    window::hide_settings(&app)?;
+    // 설정(또는 온보딩)이 닫히면 스캔 오버레이가 곧바로 보여야 한다.
+    // 설치 모드에서 숨겨진 floating도 이 호출로 되살아난다.
+    window::show_floating(&app)
 }
 
 pub fn run() {

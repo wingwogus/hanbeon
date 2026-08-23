@@ -7,7 +7,7 @@ import { Range } from '@/components/settings/Range'
 import { Section } from '@/components/settings/Section'
 import { SwitchTester } from '@/components/settings/SwitchTester'
 import { formatSeconds } from '@/lib/format'
-import { type Profile, saveProfile } from '@/lib/profile'
+import { closeSettings, type Profile, saveProfile } from '@/lib/profile'
 
 import { ArduinoSetup } from './ArduinoSetup'
 
@@ -44,6 +44,8 @@ export function Onboarding({
     } catch {
       onDone(next)
     }
+    // 온보딩이 끝나면 설정 창을 닫고 스캔 오버레이를 곧바로 띄운다.
+    await closeSettings().catch(() => {})
   }
 
   const goNext = () => setStep((previous) => previous + 1)
