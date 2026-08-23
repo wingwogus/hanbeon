@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -53,7 +53,6 @@ pub enum FirmwareState {
     ConfirmationRequired {
         device_id: String,
         reason: ConfirmationReason,
-        confirmation_token: String,
         display_name: String,
     },
     Preparing {
@@ -72,6 +71,8 @@ pub enum FirmwareState {
     Error {
         code: &'static str,
         retryable: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
 }
 
@@ -119,8 +120,7 @@ pub fn startup_mode() -> StartupMode {
 
 #[derive(Clone, Debug)]
 struct Confirmation {
-    device_id: String,
-    token: String,
+    candidate: ArduinoCandidate,
 }
 
 #[derive(Default)]
@@ -136,24 +136,14 @@ pub struct FirmwareInstaller {
 }
 
 impl FirmwareInstaller {
-    fn remember_confirmation(&self, device_id: &str) -> String {
-        static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
-        let token = format!(
-            "firmware-{process}-{}",
-            NEXT_TOKEN.fetch_add(1, Ordering::Relaxed),
-            process = std::process::id()
-        );
+    fn remember_confirmation(&self, candidate: ArduinoCandidate) {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .confirmation = Some(Confirmation {
-            device_id: device_id.to_owned(),
-            token: token.clone(),
-        });
-        token
+            .confirmation = Some(Confirmation { candidate });
     }
 
-    fn begin(&self, device_id: &str, token: &str) -> Result<(), String> {
+    fn begin(&self, device_id: &str) -> Result<ArduinoCandidate, String> {
         let mut state = self
             .inner
             .lock()
@@ -161,17 +151,16 @@ impl FirmwareInstaller {
         if state.active {
             return Err("펌웨어 설치가 이미 진행 중입니다.".to_owned());
         }
-        let valid = state
+        let candidate = state
             .confirmation
             .as_ref()
-            .is_some_and(|saved| saved.device_id == device_id && saved.token == token);
-        if !valid {
-            return Err("펌웨어 설치 확인 정보가 유효하지 않습니다.".to_owned());
-        }
+            .filter(|saved| saved.candidate.device_id == device_id)
+            .map(|saved| saved.candidate.clone())
+            .ok_or_else(|| "펌웨어 설치 확인 정보가 유효하지 않습니다.".to_owned())?;
         state.confirmation = None;
         state.active = true;
         self.cancelled.store(false, Ordering::Release);
-        Ok(())
+        Ok(candidate)
     }
 
     fn finish(&self) {
@@ -201,6 +190,10 @@ impl LocalFirmwareSource {
     }
 }
 
+fn preferred_serial_path(name: &str) -> bool {
+    !name.contains("/tty.") && !name.contains(r"\\.\COM")
+}
+
 fn supported_candidate(port: serialport::SerialPortInfo) -> Option<ArduinoCandidate> {
     let serialport::SerialPortType::UsbPort(usb) = port.port_type else {
         return None;
@@ -208,9 +201,15 @@ fn supported_candidate(port: serialport::SerialPortInfo) -> Option<ArduinoCandid
     if usb.vid != UNO_VID || usb.pid != UNO_PID {
         return None;
     }
+    if cfg!(unix) && !port.port_name.contains("/cu.") {
+        return None;
+    }
 
     let display_name = usb.product.unwrap_or_else(|| "Arduino Uno R3".to_owned());
-    let device_id = format!("usb-{UNO_VID:04x}-{UNO_PID:04x}-{}", port.port_name);
+    let device_id = usb.serial_number.as_deref().map_or_else(
+        || format!("usb-{UNO_VID:04x}-{UNO_PID:04x}-{}", port.port_name),
+        |serial| format!("usb-{UNO_VID:04x}-{UNO_PID:04x}-{serial}"),
+    );
     Some(ArduinoCandidate {
         device_id,
         display_name,
@@ -221,9 +220,19 @@ fn supported_candidate(port: serialport::SerialPortInfo) -> Option<ArduinoCandid
 }
 
 fn candidates() -> Result<Vec<ArduinoCandidate>, String> {
-    serialport::available_ports()
-        .map_err(|error| error.to_string())
-        .map(|ports| ports.into_iter().filter_map(supported_candidate).collect())
+    let mut found: Vec<ArduinoCandidate> = serialport::available_ports()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(supported_candidate)
+        .collect();
+    found.sort_by(|left, right| {
+        preferred_serial_path(&left.port)
+            .cmp(&preferred_serial_path(&right.port))
+            .reverse()
+            .then_with(|| left.port.cmp(&right.port))
+    });
+    found.dedup_by(|left, right| left.device_id == right.device_id);
+    Ok(found)
 }
 
 fn find_candidate(device_id: &str) -> Result<ArduinoCandidate, String> {
@@ -292,6 +301,7 @@ pub fn list_arduino_candidates(app: AppHandle) -> Result<Vec<ArduinoCandidate>, 
             &FirmwareState::Error {
                 code: "notFound",
                 retryable: true,
+                detail: None,
             },
         );
     } else {
@@ -326,6 +336,7 @@ pub fn probe_arduino_firmware(
             &FirmwareState::Error {
                 code: "portUnavailable",
                 retryable: true,
+                detail: None,
             },
         );
         "Arduino 포트를 사용할 수 없습니다.".to_owned()
@@ -342,6 +353,7 @@ pub fn probe_arduino_firmware(
             &FirmwareState::Error {
                 code: "portUnavailable",
                 retryable: true,
+                detail: None,
             },
         );
     })?;
@@ -354,8 +366,8 @@ pub fn probe_arduino_firmware(
             } else {
                 ConfirmationReason::DifferentFirmware
             };
+            installer.remember_confirmation(candidate.clone());
             FirmwareState::ConfirmationRequired {
-                confirmation_token: installer.remember_confirmation(&device_id),
                 device_id,
                 reason,
                 display_name: candidate.display_name,
@@ -409,26 +421,90 @@ fn bundled_cli() -> Result<PathBuf, String> {
         .join(name))
 }
 
-fn run_cli(cli: &Path, args: &[OsString]) -> Result<(), String> {
-    let output = Command::new(cli)
-        .args(args)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned())
+fn cli_home() -> Result<PathBuf, String> {
+    let home = std::env::temp_dir().join("hanbeon-arduino-cli");
+    fs::create_dir_all(&home).map_err(|error| error.to_string())?;
+    Ok(home)
+}
+
+fn cli_env(cli: &Path) -> Result<Vec<(OsString, OsString)>, String> {
+    let home = cli_home()?;
+    Ok(vec![
+        (
+            "ARDUINO_DIRECTORIES_DATA".into(),
+            home.as_os_str().to_owned(),
+        ),
+        (
+            "ARDUINO_DIRECTORIES_DOWNLOADS".into(),
+            home.join("staging").as_os_str().to_owned(),
+        ),
+        (
+            "ARDUINO_DIRECTORIES_USER".into(),
+            home.join("user").as_os_str().to_owned(),
+        ),
+        ("HOME".into(), home.as_os_str().to_owned()),
+        (
+            "PATH".into(),
+            format!(
+                "{}{}{}",
+                cli.parent().unwrap_or_else(|| Path::new(".")).display(),
+                std::path::MAIN_SEPARATOR,
+                std::env::var("PATH").unwrap_or_default()
+            )
+            .into(),
+        ),
+    ])
+}
+
+fn log_firmware(message: &str) {
+    eprintln!("{message}");
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/hanbeon-firmware.log")
+    {
+        let _ = writeln!(file, "{message}");
     }
 }
 
-fn rediscover(previous_port: &str, cancelled: &AtomicBool) -> Option<ArduinoCandidate> {
+fn run_cli(cli: &Path, args: &[OsString]) -> Result<(), String> {
+    log_firmware(&format!("[firmware] cli: {} {:?}", cli.display(), args));
+    let mut command = Command::new(cli);
+    command.args(args);
+    for (key, value) in cli_env(cli)? {
+        command.env(key, value);
+    }
+    let output = command.output().map_err(|error| error.to_string())?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if !stdout.is_empty() {
+            log_firmware(&format!("[firmware] cli stdout: {stdout}"));
+        }
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        log_firmware(&format!(
+            "[firmware] cli failed ({:?}): {stderr}",
+            output.status.code()
+        ));
+        Err(stderr)
+    }
+}
+
+fn rediscover(previous: &ArduinoCandidate, cancelled: &AtomicBool) -> Option<ArduinoCandidate> {
     let deadline = Instant::now() + REDISCOVERY_TIMEOUT;
     while Instant::now() < deadline && !cancelled.load(Ordering::Acquire) {
         if let Ok(found) = candidates()
             && let Some(candidate) = found
                 .iter()
-                .find(|candidate| candidate.port == previous_port)
+                .find(|candidate| candidate.device_id == previous.device_id)
                 .cloned()
+                .or_else(|| {
+                    found
+                        .iter()
+                        .find(|candidate| candidate.port == previous.port)
+                        .cloned()
+                })
                 .or_else(|| (found.len() == 1).then(|| found[0].clone()))
         {
             return Some(candidate);
@@ -438,11 +514,11 @@ fn rediscover(previous_port: &str, cancelled: &AtomicBool) -> Option<ArduinoCand
     None
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 enum InstallFailure {
     Cancelled,
-    Upload,
-    Verify,
+    Upload(String),
+    Verify(String),
 }
 
 fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<(), InstallFailure> {
@@ -459,17 +535,22 @@ fn install(
 ) -> Result<(), InstallFailure> {
     let source = LocalFirmwareSource.sketch_path();
     if !source.join("hanbeon_arduino_switch.ino").is_file() {
-        return Err(InstallFailure::Upload);
+        return Err(InstallFailure::Upload(format!(
+            "local sketch missing: {}",
+            source.display()
+        )));
     }
     let output = std::env::temp_dir().join(format!("hanbeon-firmware-{}", std::process::id()));
     let _ = fs::remove_dir_all(&output);
-    fs::create_dir_all(&output).map_err(|_| InstallFailure::Upload)?;
-    let cli = bundled_cli().map_err(|_| InstallFailure::Upload)?;
+    fs::create_dir_all(&output).map_err(|error| {
+        InstallFailure::Upload(format!("output dir {}: {error}", output.display()))
+    })?;
+    let cli = bundled_cli().map_err(InstallFailure::Upload)?;
 
     ensure_not_cancelled(cancelled)?;
-    run_cli(&cli, &core_install_args()).map_err(|_| InstallFailure::Upload)?;
+    run_cli(&cli, &core_install_args()).map_err(InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
-    run_cli(&cli, &compile_args(&source, &output)).map_err(|_| InstallFailure::Upload)?;
+    run_cli(&cli, &compile_args(&source, &output)).map_err(InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
     emit(
         app,
@@ -477,7 +558,7 @@ fn install(
             device_id: device_id.to_owned(),
         },
     );
-    run_cli(&cli, &upload_args(&candidate.port, &output)).map_err(|_| InstallFailure::Upload)?;
+    run_cli(&cli, &upload_args(&candidate.port, &output)).map_err(InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
     emit(
         app,
@@ -485,14 +566,18 @@ fn install(
             device_id: device_id.to_owned(),
         },
     );
-    let rediscovered = rediscover(&candidate.port, cancelled).ok_or(InstallFailure::Verify)?;
+    let rediscovered = rediscover(candidate, cancelled).ok_or_else(|| {
+        InstallFailure::Verify("upload 후 Arduino를 다시 찾지 못했습니다.".to_owned())
+    })?;
     ensure_not_cancelled(cancelled)?;
-    let verified = probe_port(&rediscovered.port).map_err(|_| InstallFailure::Verify)?;
+    let verified = probe_port(&rediscovered.port).map_err(InstallFailure::Verify)?;
     let _ = fs::remove_dir_all(output);
     if verified == HandshakeClassification::Installed {
         Ok(())
     } else {
-        Err(InstallFailure::Verify)
+        Err(InstallFailure::Verify(
+            "업로드는 끝났지만 전용 펌웨어 확인에 실패했습니다.".to_owned(),
+        ))
     }
 }
 
@@ -500,11 +585,14 @@ fn install(
 pub fn begin_firmware_install(
     app: AppHandle,
     device_id: String,
-    confirmation_token: String,
     installer: State<'_, FirmwareInstaller>,
     coordinator: State<'_, ArduinoCoordinator>,
 ) -> Result<(), String> {
-    installer.begin(&device_id, &confirmation_token)?;
+    let candidate = installer.begin(&device_id).inspect_err(|error| {
+        log_firmware(&format!(
+            "[firmware] install rejected for {device_id}: {error}"
+        ));
+    })?;
     let installer = installer.inner().clone();
     let coordinator = coordinator.inner().clone();
     thread::spawn(move || {
@@ -514,10 +602,9 @@ pub fn begin_firmware_install(
                 device_id: device_id.clone(),
             },
         );
-        let candidate = find_candidate(&device_id);
         let ownership = coordinator.acquire_installer();
         let result = match (candidate, ownership) {
-            (Ok(candidate), Ok(ownership)) => {
+            (candidate, Ok(ownership)) => {
                 let result = install(&app, &device_id, &candidate, &installer.cancelled);
                 let exit = match result {
                     Ok(()) => InstallerExit::Success,
@@ -527,19 +614,28 @@ pub fn begin_firmware_install(
                 ownership.finish(exit);
                 result
             }
-            _ => Err(InstallFailure::Upload),
+            _ => Err(InstallFailure::Upload(
+                "Arduino 포트를 사용할 수 없습니다.".to_owned(),
+            )),
         };
+        if let Err(error) = &result {
+            log_firmware(&format!(
+                "[firmware] install failed for {device_id}: {error:?}"
+            ));
+        }
 
         let state = match result {
             Ok(()) => FirmwareState::Complete { device_id },
             Err(InstallFailure::Cancelled) => FirmwareState::Cancelled,
-            Err(InstallFailure::Upload) => FirmwareState::Error {
+            Err(InstallFailure::Upload(detail)) => FirmwareState::Error {
                 code: "uploadFailed",
                 retryable: true,
+                detail: Some(detail),
             },
-            Err(InstallFailure::Verify) => FirmwareState::Error {
+            Err(InstallFailure::Verify(detail)) => FirmwareState::Error {
                 code: "verifyFailed",
                 retryable: true,
+                detail: Some(detail),
             },
         };
         installer.finish();

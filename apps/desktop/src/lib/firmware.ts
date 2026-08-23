@@ -48,6 +48,7 @@ export type FirmwareState =
       state: 'error'
       code: string
       retryable: boolean
+      detail?: string
     }
 
 export const INITIAL_FIRMWARE_STATE: FirmwareState = { state: 'idle' }
@@ -110,7 +111,9 @@ export function firmwareStatusText(state: FirmwareState): string {
     case 'cancelled':
       return '펌웨어 설치를 취소했습니다'
     case 'error':
-      return firmwareErrorText(state.code)
+      return state.detail
+        ? `${firmwareErrorText(state.code)}\n${state.detail}`
+        : firmwareErrorText(state.code)
   }
 }
 
@@ -133,7 +136,7 @@ export function canBeginInstall(
   state: FirmwareState,
   overwriteAcknowledged: boolean,
 ): boolean {
-  if (state.state !== 'confirmationRequired' || !state.confirmationToken) {
+  if (state.state !== 'confirmationRequired') {
     return false
   }
   if (state.reason === 'differentFirmware' && !overwriteAcknowledged) {
@@ -165,11 +168,8 @@ export const listArduinoCandidates = () =>
 export const probeArduinoFirmware = (deviceId: string) =>
   invoke<FirmwareState>(FIRMWARE_COMMANDS.probe, { deviceId })
 
-export const beginFirmwareInstall = (
-  deviceId: string,
-  confirmationToken: string,
-) =>
-  invoke<void>(FIRMWARE_COMMANDS.beginInstall, { deviceId, confirmationToken })
+export const beginFirmwareInstall = (deviceId: string) =>
+  invoke<void>(FIRMWARE_COMMANDS.beginInstall, { deviceId })
 
 export const cancelFirmwareInstall = () =>
   invoke<void>(FIRMWARE_COMMANDS.cancelInstall)

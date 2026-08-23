@@ -211,11 +211,15 @@ export function ArduinoSetup({
   }
 
   const install = () => {
-    if (!confirmation?.confirmationToken || !installEnabled) return
-    void beginFirmwareInstall(
-      confirmation.deviceId,
-      confirmation.confirmationToken,
-    ).catch(() => {})
+    if (!confirmation || !installEnabled) return
+    void beginFirmwareInstall(confirmation.deviceId).catch((error: unknown) => {
+      setFirmware({
+        state: 'error',
+        code: 'uploadFailed',
+        retryable: true,
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
   }
 
   const later = () => {
