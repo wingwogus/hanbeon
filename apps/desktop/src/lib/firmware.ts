@@ -124,11 +124,13 @@ export function firmwareErrorText(code: string): string {
   return '펌웨어 설치 중 문제가 발생했습니다'
 }
 
-export function firmwareOwnsPort(state: FirmwareState): boolean {
+export function firmwareOwnsPort(
+  state: FirmwareState | null | undefined,
+): boolean {
   return (
-    state.state === 'preparing' ||
-    state.state === 'uploading' ||
-    state.state === 'verifying'
+    state?.state === 'preparing' ||
+    state?.state === 'uploading' ||
+    state?.state === 'verifying'
   )
 }
 
@@ -145,13 +147,45 @@ export function canBeginInstall(
   return true
 }
 
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+const FIRMWARE_STATES = new Set([
+  'idle',
+  'searching',
+  'boardFound',
+  'probing',
+  'alreadyInstalled',
+  'confirmationRequired',
+  'preparing',
+  'uploading',
+  'verifying',
+  'complete',
+  'cancelled',
+  'error',
+])
+
 export function asFirmwareState(payload: unknown): FirmwareState | null {
   if (!payload || typeof payload !== 'object' || !('state' in payload)) {
     return null
   }
-  const state = (payload as { state: unknown }).state
-  if (typeof state !== 'string') return null
-  return payload as FirmwareState
+  const record = payload as Record<string, unknown>
+  const state = record.state
+  if (typeof state !== 'string' || !FIRMWARE_STATES.has(state)) {
+    return null
+  }
+  const deviceId = asString(record.deviceId) ?? asString(record.device_id)
+  if (state === 'confirmationRequired' && !deviceId) {
+    return null
+  }
+  if (state === 'boardFound' && !Array.isArray(record.candidates)) {
+    return null
+  }
+  if (deviceId) {
+    record.deviceId = deviceId
+  }
+  return record as FirmwareState
 }
 
 export function usbIdentity(vid: number, pid: number): string {
@@ -165,8 +199,8 @@ export function candidateLabel(candidate: ArduinoCandidate): string {
 export const listArduinoCandidates = () =>
   invoke<ArduinoCandidate[]>(FIRMWARE_COMMANDS.listCandidates)
 
-export function firmwareDeviceArgs(deviceId: string) {
-  const id = deviceId.trim()
+export function firmwareDeviceArgs(deviceId: string | undefined) {
+  const id = deviceId?.trim() ?? ''
   if (!id) {
     throw new Error('deviceId is required')
   }

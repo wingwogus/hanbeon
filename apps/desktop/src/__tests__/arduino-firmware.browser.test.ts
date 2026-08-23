@@ -161,6 +161,24 @@ describe('Arduino firmware lifecycle contract', () => {
     expect(asFirmwareState({ state: 'searching' })).toEqual({
       state: 'searching',
     })
+    expect(
+      asFirmwareState({
+        state: 'confirmationRequired',
+        device_id: 'candidate-1',
+        reason: 'noResponse',
+      }),
+    ).toEqual({
+      state: 'confirmationRequired',
+      deviceId: 'candidate-1',
+      device_id: 'candidate-1',
+      reason: 'noResponse',
+    })
+    expect(
+      asFirmwareState({
+        state: 'confirmationRequired',
+        reason: 'noResponse',
+      }),
+    ).toBeNull()
     await listArduinoCandidates()
     await probeArduinoFirmware('candidate-1')
     await beginFirmwareInstall('candidate-1')

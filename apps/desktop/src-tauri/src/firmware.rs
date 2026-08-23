@@ -38,7 +38,11 @@ pub struct ArduinoCandidate {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "state")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "state"
+)]
 pub enum FirmwareState {
     Searching,
     BoardFound {
@@ -427,6 +431,27 @@ fn upload_args(port: &str, output: &Path) -> Vec<OsString> {
     ]
 }
 
+fn pulse_bootloader(port: &str) -> Result<(), String> {
+    {
+        let serial = serialport::new(port, 1200)
+            .timeout(Duration::from_millis(100))
+            .exclusive(true)
+            .open()
+            .map_err(|error| format!("{port}: {error}"))?;
+        let mut serial = serial;
+        let _ = serial.write_data_terminal_ready(false);
+        drop(serial);
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if Path::new(port).exists() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn core_install_args() -> Vec<OsString> {
     ["core", "install", "arduino:avr"]
         .into_iter()
@@ -584,6 +609,7 @@ fn install(
             device_id: device_id.to_owned(),
         },
     );
+    pulse_bootloader(&candidate.port).map_err(InstallFailure::Upload)?;
     run_cli(&cli, &upload_args(&candidate.port, &output)).map_err(InstallFailure::Upload)?;
     ensure_not_cancelled(cancelled)?;
     emit(
@@ -803,5 +829,18 @@ mod tests {
             startup_mode_for([HandshakeClassification::DifferentFirmware]),
             StartupMode::Setup
         );
+    }
+
+    #[test]
+    fn firmware_state_serializes_device_id_as_camel_case() {
+        let json = serde_json::to_value(FirmwareState::ConfirmationRequired {
+            device_id: "candidate-1".to_owned(),
+            reason: ConfirmationReason::NoResponse,
+            display_name: "Arduino Uno".to_owned(),
+        })
+        .expect("serialize confirmation");
+        assert_eq!(json["state"], "confirmationRequired");
+        assert_eq!(json["deviceId"], "candidate-1");
+        assert!(json.get("device_id").is_none());
     }
 }

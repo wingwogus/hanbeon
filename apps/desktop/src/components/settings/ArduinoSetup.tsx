@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 
 import {
   type ArduinoCandidate,
+  asFirmwareState,
   beginFirmwareInstall,
   canBeginInstall,
   cancelFirmwareInstall,
@@ -159,7 +160,8 @@ export function ArduinoSetup({
 
   useEffect(() => {
     const unlisten = listen<FirmwareState>(FIRMWARE_EVENT, (event) => {
-      setFirmware(event.payload)
+      const next = asFirmwareState(event.payload)
+      if (next) setFirmware(next)
     })
     return () => {
       unlisten.then((stop) => stop()).catch(() => {})
@@ -198,15 +200,16 @@ export function ArduinoSetup({
     setSelectedId(null)
     setOverwriteAcknowledged(false)
     setFirmware({ state: 'searching' })
-    void listArduinoCandidates()
-      .then((candidates) => setFirmware({ state: 'boardFound', candidates }))
-      .catch(() => {})
+    void listArduinoCandidates().catch(() => {})
   }
 
   const probeSelected = () => {
     if (!chosen) return
     void probeArduinoFirmware(chosen.deviceId)
-      .then(setFirmware)
+      .then((payload) => asFirmwareState(payload))
+      .then((next) => {
+        if (next) setFirmware(next)
+      })
       .catch((error: unknown) => {
         setFirmware({
           state: 'error',
@@ -218,7 +221,7 @@ export function ArduinoSetup({
   }
 
   const install = () => {
-    if (!confirmation || !installEnabled) return
+    if (!confirmation || !installEnabled || !confirmation.deviceId) return
     void beginFirmwareInstall(confirmation.deviceId).catch((error: unknown) => {
       setFirmware({
         state: 'error',

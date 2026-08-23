@@ -271,9 +271,9 @@ describe('Arduino firmware setup screens', () => {
     expect(
       view.container.querySelector('[data-state]')?.getAttribute('data-state'),
     ).toBe('searching')
-    expect(
-      view.container.querySelector('[role="status"]')?.textContent,
-    ).toInclude('Arduino Uno를 USB로 연결해 주세요')
+    expect(view.container.querySelector('output')?.textContent).toInclude(
+      'Arduino Uno를 USB로 연결해 주세요',
+    )
   })
 
   it('shows a found Uno without using the port path as the label', async () => {
@@ -349,9 +349,7 @@ describe('Arduino firmware setup screens', () => {
       name: FIRMWARE_COMMANDS.probe,
       args: { deviceId: 'candidate-1', device_id: 'candidate-1' },
     })
-    expect(textOf(view.container)).toInclude(
-      '펌웨어 설치 중 문제가 발생했습니다',
-    )
+    expect(textOf(view.container)).toInclude('포트를 사용할 수 없습니다')
     expect(textOf(view.container)).toInclude('invalid args device_id')
     expect(
       view.container.querySelector('[data-state]')?.getAttribute('data-state'),
@@ -400,7 +398,7 @@ describe('Arduino firmware setup screens', () => {
     })
     expect(commands.at(-1)).toEqual({
       name: FIRMWARE_COMMANDS.beginInstall,
-      args: { deviceId: 'candidate-1', confirmationToken: 'token-1' },
+      args: { deviceId: 'candidate-1', device_id: 'candidate-1' },
     })
   })
 
