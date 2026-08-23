@@ -7,6 +7,7 @@
 
 mod action;
 mod adapt;
+mod app_registry;
 pub mod arduino;
 mod audio;
 mod emit;
@@ -188,15 +189,24 @@ pub fn run() {
 
             let profile = Arc::new(Mutex::new(profile));
             let scanner = Scanner::new(Arc::clone(&profile), audio, journal.clone());
+            let registry = app_registry::Registry::spawn(
+                app.path().app_cache_dir()?.join("hana-cloud"),
+            );
             let moves = window::MoveWatch::default();
 
             app.manage(SharedProfile(Arc::clone(&profile)));
             app.manage(Arc::clone(&detector));
             app.manage(scanner.clone());
+            app.manage(registry.clone());
             app.manage(moves.clone());
 
             moves.watch(app.handle().clone(), Arc::clone(&profile));
-            foreground::watch(app.handle().clone(), Arc::clone(&profile), scanner.clone());
+            foreground::watch(
+                app.handle().clone(),
+                Arc::clone(&profile),
+                scanner.clone(),
+                registry,
+            );
             scanner.start(app.handle().clone());
 
             // Native serial starts at app launch. P/R edges share GestureDetector

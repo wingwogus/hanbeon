@@ -17,6 +17,7 @@
 //! 인자로 받는 순수 로직이라 단위 테스트로 고정할 수 있고, 키 주입은 락을
 //! 놓은 뒤에 실행할 수 있다.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,7 +27,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::action::{Action, Cell, Kind};
 use crate::adapt::{Adapter, Adjustment, Limits, Sample};
+use crate::app_registry::Registry;
 use crate::audio::{Audio, Cue};
+use crate::focused_application::FocusedApplication;
 use crate::input::{Gesture, Judgement};
 use crate::journal::{Event, Journal};
 use crate::led::LedBridge;
@@ -169,7 +172,12 @@ struct State {
     /// 선택한 직후에는 다시 옮기는 일이 가장 잦다. 그래서 `Enter`를 누르면
     /// 이어서 순환하는 대신 첫 이동 칸부터 다시 시작한다.
     restart_next: bool,
+    /// 표시 이름과 별개인 프로필 버전 키. 같은 앱 프로필의 SHA가 바뀌어도
+    /// 새 칸으로 갈아 끼우기 위해 쓴다.
+    preset_key: Option<String>,
     preset: Option<String>,
+    /// Hana Cloud 인식 완료 문구는 한 세션에 프로필 ID당 한 번만 알린다.
+    recognized_registry: HashSet<String>,
     mode: Mode,
     interval: Duration,
     /// 현재 모드가 끝나는 시각.
@@ -197,7 +205,9 @@ impl State {
             cells,
             order,
             restart_next: false,
+            preset_key: None,
             preset: None,
+            recognized_registry: HashSet::new(),
             mode: Mode::Scanning,
             interval,
             deadline: now + interval,
@@ -237,9 +247,16 @@ impl State {
     ///
     /// 커서를 첫 칸으로 되돌린다. 칸 수가 달라진 자리에 커서를 그대로 두면
     /// 사용자가 보고 있던 칸과 실제로 실행될 칸이 어긋난다.
-    fn apply_cells(&mut self, cells: Vec<Cell>, preset: Option<String>, now: Instant) {
+    fn apply_cells(
+        &mut self,
+        cells: Vec<Cell>,
+        preset_key: Option<String>,
+        preset: Option<String>,
+        now: Instant,
+    ) {
         self.order = crate::action::scan_order(&cells);
         self.cells = cells;
+        self.preset_key = preset_key;
         self.preset = preset;
         self.position = 0;
         self.restart_next = false;
@@ -497,7 +514,12 @@ impl Scanner {
     ///
     /// 바뀐 것이 없으면 아무것도 하지 않는다. 이 함수는 300ms마다 불리므로
     /// 매번 상태를 갈아엎으면 커서가 제자리를 맴돌아 스캔이 진행되지 않는다.
-    pub fn apply_preset(&self, app: &AppHandle, bundle_id: Option<&str>) {
+    pub fn apply_preset(
+        &self,
+        app: &AppHandle,
+        focused: Option<&FocusedApplication>,
+        registry: &Registry,
+    ) {
         let enabled = self
             .profile
             .lock()
@@ -505,28 +527,37 @@ impl Scanner {
             .unwrap_or(false);
 
         let preset = if enabled {
-            bundle_id.and_then(crate::preset::for_bundle)
+            focused
+                .and_then(|focused| registry.lookup(focused))
+                .and_then(crate::preset::PresetSelection::from_registry)
         } else {
             None
         };
-        let name = preset.map(|preset| preset.name.to_string());
+        let key = preset.as_ref().map(|preset| preset.key.clone());
+        let name = preset.as_ref().map(|preset| preset.name.clone());
+        let registry_id = preset.as_ref().map(|preset| preset.registry_id.clone());
+        let cells = crate::preset::cells_for(preset.as_ref());
 
-        let snapshot = {
+        let (snapshot, first_recognition) = {
             let Ok(mut state) = self.state.lock() else {
                 return;
             };
-            if state.preset == name {
+            if state.preset_key == key {
                 return;
             }
+            let first_recognition = registry_id
+                .as_ref()
+                .is_some_and(|id| state.recognized_registry.insert(id.clone()));
             let now = Instant::now();
-            state.apply_cells(crate::preset::cells_for(preset), name.clone(), now);
-            state.snapshot(now)
+            state.apply_cells(cells, key, name.clone(), now);
+            (state.snapshot(now), first_recognition)
         };
 
-        let message = match &name {
-            Some(name) => format!("{name} — 버튼 {}개 추가", snapshot.cells.len() - 4),
-            None => "앱별 버튼 없음".to_string(),
-        };
+        let message = preset_message(
+            name.as_deref(),
+            snapshot.cells.len().saturating_sub(4),
+            first_recognition,
+        );
 
         if log_enabled() {
             eprintln!("[preset] {message} (칸 {})", snapshot.cells.len());
@@ -739,6 +770,16 @@ impl Scanner {
     }
 }
 
+fn preset_message(name: Option<&str>, extras: usize, first_recognition: bool) -> String {
+    match name {
+        Some(name) if first_recognition => {
+            format!("{name} 프로필 인식 완료 · 버튼 {extras}개 추가")
+        }
+        Some(name) => format!("{name} — 버튼 {extras}개 추가"),
+        None => "앱별 버튼 없음".to_string(),
+    }
+}
+
 /// `HANBEON_LOG=1`이면 상태 전이와 실행 결과를 stderr로 찍는다.
 ///
 /// 정량 검증(PRD 10절)에는 어차피 이벤트 기록이 필요하다. 지금은 진단용
@@ -815,6 +856,18 @@ mod tests {
     fn state() -> (State, Instant) {
         let now = Instant::now();
         (State::new(&fixed_profile(), now), now)
+    }
+
+    #[test]
+    fn hana_cloud_프로필은_처음에만_인식_완료로_알린다() {
+        assert_eq!(
+            preset_message(Some("PDF 뷰어"), 2, true),
+            "PDF 뷰어 프로필 인식 완료 · 버튼 2개 추가"
+        );
+        assert_eq!(
+            preset_message(Some("PDF 뷰어"), 2, false),
+            "PDF 뷰어 — 버튼 2개 추가"
+        );
     }
 
     /// 커서를 원하는 칸으로 옮긴다.
