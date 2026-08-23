@@ -320,13 +320,42 @@ describe('Arduino firmware setup screens', () => {
     })
     expect(commands.at(-1)).toEqual({
       name: FIRMWARE_COMMANDS.probe,
-      args: { deviceId: 'candidate-2' },
+      args: { device_id: 'candidate-2' },
     })
     expect(
       commands.some(
         (command) => command.name === FIRMWARE_COMMANDS.beginInstall,
       ),
     ).toBe(false)
+  })
+
+  it('surfaces a probe failure instead of staying on the found-board screen', async () => {
+    invokeImpl = async (name) => {
+      if (name === FIRMWARE_COMMANDS.probe) {
+        throw new Error('invalid args device_id')
+      }
+      return undefined
+    }
+    const { view } = await setupView({
+      state: 'boardFound',
+      candidates: [UNO],
+    })
+
+    await act(async () => {
+      fireEvent.click(buttonNamed(view.container, '다음')!)
+    })
+
+    expect(commands.at(-1)).toEqual({
+      name: FIRMWARE_COMMANDS.probe,
+      args: { device_id: 'candidate-1' },
+    })
+    expect(textOf(view.container)).toInclude(
+      '펌웨어 설치 중 문제가 발생했습니다',
+    )
+    expect(textOf(view.container)).toInclude('invalid args device_id')
+    expect(
+      view.container.querySelector('[data-state]')?.getAttribute('data-state'),
+    ).toBe('error')
   })
 
   it('skips upload when the dedicated firmware is already installed', async () => {

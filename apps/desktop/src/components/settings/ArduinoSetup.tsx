@@ -207,7 +207,14 @@ export function ArduinoSetup({
     if (!chosen) return
     void probeArduinoFirmware(chosen.deviceId)
       .then(setFirmware)
-      .catch(() => {})
+      .catch((error: unknown) => {
+        setFirmware({
+          state: 'error',
+          code: 'portUnavailable',
+          retryable: true,
+          detail: error instanceof Error ? error.message : String(error),
+        })
+      })
   }
 
   const install = () => {
