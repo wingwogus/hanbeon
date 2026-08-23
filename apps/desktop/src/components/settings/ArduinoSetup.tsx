@@ -198,12 +198,16 @@ export function ArduinoSetup({
     setSelectedId(null)
     setOverwriteAcknowledged(false)
     setFirmware({ state: 'searching' })
-    void listArduinoCandidates().catch(() => {})
+    void listArduinoCandidates()
+      .then((candidates) => setFirmware({ state: 'boardFound', candidates }))
+      .catch(() => {})
   }
 
   const probeSelected = () => {
     if (!chosen) return
-    void probeArduinoFirmware(chosen.deviceId).catch(() => {})
+    void probeArduinoFirmware(chosen.deviceId)
+      .then(setFirmware)
+      .catch(() => {})
   }
 
   const install = () => {
