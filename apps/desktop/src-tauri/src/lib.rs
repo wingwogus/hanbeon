@@ -10,6 +10,7 @@ mod adapt;
 pub mod arduino;
 mod audio;
 mod emit;
+mod firmware;
 mod foreground;
 mod input;
 mod journal;
@@ -235,6 +236,7 @@ pub fn run() {
                 )
             });
             app.manage(native_switch);
+            app.manage(firmware::FirmwareInstaller::default());
 
             let registered = input::register(
                 app.handle(),
@@ -284,7 +286,11 @@ pub fn run() {
             save_profile,
             open_settings,
             close_settings,
-            log_directory
+            log_directory,
+            firmware::list_arduino_candidates,
+            firmware::probe_arduino_firmware,
+            firmware::begin_firmware_install,
+            firmware::cancel_firmware_install
         ])
         .build(tauri::generate_context!())
         .expect("한번 앱을 시작하지 못했습니다");
