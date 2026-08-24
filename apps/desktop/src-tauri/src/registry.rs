@@ -1,8 +1,8 @@
-//! Hana Registry (https://github.com/dev-five-git/hana-registry) client.
+//! Hana Cloud (https://github.com/dev-five-git/hana-cloud) board registry client.
 //!
 //! Downloads and verifies the root index, board manifests, and firmware files.
 //! The contract from the registry README is binding:
-//! - HTTPS to `raw.githubusercontent.com/dev-five-git/hana-registry` only; a
+//! - HTTPS to `raw.githubusercontent.com/dev-five-git/hana-cloud` only; a
 //!   redirect that changes the host is refused.
 //! - Size caps: index 256KiB, manifest 64KiB, firmware 2MiB.
 //! - 5 second timeout per request.
@@ -21,7 +21,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-pub const REGISTRY_BASE: &str = "https://raw.githubusercontent.com/dev-five-git/hana-registry/main";
+pub const REGISTRY_BASE: &str = "https://raw.githubusercontent.com/dev-five-git/hana-cloud/main";
 pub const INDEX_MAX_BYTES: usize = 256 * 1024;
 pub const MANIFEST_MAX_BYTES: usize = 64 * 1024;
 pub const FIRMWARE_MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -130,11 +130,17 @@ pub struct UsbIdentity {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegistryIndex {
+    schema_version: u32,
+    revision: u64,
+    #[serde(rename = "apps")]
+    _apps: Vec<serde_json::Value>,
     boards: Vec<IndexBoard>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IndexBoard {
     id: String,
     name: String,
@@ -144,6 +150,7 @@ struct IndexBoard {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DetectSpec {
     usb: Vec<UsbDetectEntry>,
 }
@@ -169,15 +176,57 @@ struct UsbDetectEntry {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BoardManifest {
+    schema_version: u32,
+    id: String,
     firmware: FirmwareRef,
+    wiring: Vec<WiringEntry>,
+    #[serde(default)]
+    image: Option<ImageRef>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FirmwareRef {
     pub path: String,
+    pub format: String,
+    pub size: usize,
     pub fqbn: String,
     pub sha256: String,
+    source: SourceRef,
+    toolchain: ToolchainRef,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceRef {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ToolchainRef {
+    arduino_cli: String,
+    platform: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WiringEntry {
+    from: String,
+    to: String,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageRef {
+    path: String,
+    sha256: String,
+    alt: String,
 }
 
 /// A verified firmware ready for flashing.
@@ -200,7 +249,7 @@ fn validate_relative_path(path: &str) -> Result<(), RegistryError> {
     let allowed = !path.is_empty()
         && !path.contains("..")
         && !path.contains('\\')
-        && !path.contains("://")
+        && !path.contains(':')
         && !path.starts_with('/');
     if allowed {
         Ok(())
@@ -213,7 +262,7 @@ fn validate_sha_format(hash: &str) -> Result<(), RegistryError> {
     let valid = hash.len() == 64
         && hash
             .bytes()
-            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase());
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
     if valid {
         Ok(())
     } else {
@@ -221,8 +270,30 @@ fn validate_sha_format(hash: &str) -> Result<(), RegistryError> {
     }
 }
 
-fn parse_index(bytes: &[u8]) -> Result<RegistryIndex, RegistryError> {
-    serde_json::from_slice(bytes).map_err(|_| RegistryError::InvalidDocument("인덱스 JSON"))
+pub(crate) fn parse_index(bytes: &[u8]) -> Result<RegistryIndex, RegistryError> {
+    let index: RegistryIndex =
+        serde_json::from_slice(bytes).map_err(|_| RegistryError::InvalidDocument("인덱스 JSON"))?;
+    if index.schema_version != 1 || index.revision == 0 {
+        return Err(RegistryError::InvalidDocument("지원하지 않는 인덱스 버전"));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for board in &index.boards {
+        if board.id.is_empty()
+            || board.name.is_empty()
+            || !ids.insert(board.id.as_str())
+            || board.detect.usb.is_empty()
+        {
+            return Err(RegistryError::InvalidDocument("잘못된 보드 인덱스"));
+        }
+        validate_relative_path(&board.manifest)?;
+        validate_sha_format(&board.sha256)?;
+        for usb in &board.detect.usb {
+            if parse_usb_hex(&usb.vid).is_none() || parse_usb_hex(&usb.pid).is_none() {
+                return Err(RegistryError::InvalidDocument("잘못된 USB VID/PID"));
+            }
+        }
+    }
+    Ok(index)
 }
 
 /// Applies the README matching rules: VID/PID decides, provided descriptors can
@@ -284,6 +355,12 @@ fn match_board(index: &RegistryIndex, identity: &UsbIdentity) -> Option<UsbMatch
     })
 }
 
+impl RegistryIndex {
+    pub fn match_board(&self, identity: &UsbIdentity) -> Option<UsbMatch> {
+        match_board(self, identity)
+    }
+}
+
 /// Bytes source so tests never touch the network. Production resolves HTTPS.
 type Fetcher = dyn Fn(&str, usize) -> Result<Vec<u8>, RegistryError> + Send + Sync;
 
@@ -327,7 +404,7 @@ fn network_fetch(base_url: String) -> Box<Fetcher> {
 }
 
 /// Cache layout under the app data dir:
-/// `hana-registry/registry.json`, `<board-id>/manifest.json`,
+/// `hana-cloud/registry.json`, `<board-id>/manifest.json`,
 /// `<board-id>/firmware.hex`.
 pub struct RegistryClient {
     cache_dir: PathBuf,
@@ -389,8 +466,16 @@ impl RegistryClient {
         }
         // 원자적 교체: 쓰다 끊겨도 캐시가 깨지지 않는다.
         let temp = target.with_extension("part");
-        if fs::write(&temp, bytes).is_ok() && fs::rename(&temp, &target).is_err() {
-            let _ = fs::remove_file(&temp);
+        if fs::write(&temp, bytes).is_ok() {
+            let replaced = fs::rename(&temp, &target).or_else(|_| {
+                // Windows는 기존 파일 위 rename을 거부하므로 검증된 임시 파일이
+                // 준비된 뒤에만 이전 캐시를 제거하고 다시 옮긴다.
+                fs::remove_file(&target)?;
+                fs::rename(&temp, &target)
+            });
+            if replaced.is_err() {
+                let _ = fs::remove_file(&temp);
+            }
         }
     }
 
@@ -423,6 +508,9 @@ impl RegistryClient {
     /// Resolves, verifies, and caches a flashable firmware for the matched
     /// board. Call only after the user explicitly started an install.
     pub fn resolve_firmware(&self, matched: &UsbMatch) -> Result<VerifiedFirmware, RegistryError> {
+        if matched.board_id != "arduino.uno-r3" {
+            return Err(RegistryError::InvalidDocument("지원하지 않는 보드 모델"));
+        }
         let manifest_bytes = self.verified_with_cache(
             &matched.manifest_path,
             &matched.manifest_sha256,
@@ -431,12 +519,49 @@ impl RegistryClient {
         let manifest: BoardManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|_| RegistryError::InvalidDocument("보드 manifest JSON"))?;
 
+        if manifest.schema_version != 2
+            || manifest.id != matched.board_id
+            || manifest.firmware.format != "intel-hex"
+            || manifest.firmware.fqbn != "arduino:avr:uno"
+            || manifest.firmware.size == 0
+            || manifest.firmware.size > FIRMWARE_MAX_BYTES
+            || manifest.wiring.is_empty()
+        {
+            return Err(RegistryError::InvalidDocument(
+                "지원하지 않는 보드 manifest",
+            ));
+        }
+        validate_relative_path(&manifest.firmware.source.path)?;
+        validate_sha_format(&manifest.firmware.source.sha256)?;
+        if manifest.firmware.toolchain.arduino_cli.is_empty()
+            || manifest.firmware.toolchain.platform.is_empty()
+        {
+            return Err(RegistryError::InvalidDocument("펌웨어 빌드 출처 누락"));
+        }
+        if manifest.wiring.iter().any(|entry| {
+            entry.from.is_empty()
+                || entry.to.is_empty()
+                || entry.note.as_deref().is_some_and(str::is_empty)
+        }) {
+            return Err(RegistryError::InvalidDocument("배선 정보 오류"));
+        }
+        if let Some(image) = &manifest.image {
+            validate_relative_path(&image.path)?;
+            validate_sha_format(&image.sha256)?;
+            if image.alt.is_empty() {
+                return Err(RegistryError::InvalidDocument("보드 이미지 설명 누락"));
+            }
+        }
+
         validate_relative_path(&manifest.firmware.path)?;
         let hex_bytes = self.verified_with_cache(
             &manifest.firmware.path,
             &manifest.firmware.sha256,
             FIRMWARE_MAX_BYTES,
         )?;
+        if hex_bytes.len() != manifest.firmware.size {
+            return Err(RegistryError::InvalidDocument("펌웨어 크기 불일치"));
+        }
         let hex_text = String::from_utf8(hex_bytes)
             .map_err(|_| RegistryError::InvalidDocument("펌웨어가 텍스트가 아닙니다"))?;
 
@@ -552,13 +677,30 @@ mod tests {
         assert!(validate_relative_path("https://evil").is_err());
         assert!(validate_relative_path("").is_err());
         assert!(validate_relative_path("/abs").is_err());
+        assert!(validate_relative_path("C:/outside-cache.hex").is_err());
+        assert!(validate_relative_path("C:outside-cache.hex").is_err());
     }
 
     #[test]
     fn sha_format_requires_64_lowercase_hex() {
         assert_eq!(validate_sha_format(&"a".repeat(64)), Ok(()));
         assert!(validate_sha_format(&"A".repeat(64)).is_err());
+        assert!(validate_sha_format(&"g".repeat(64)).is_err());
         assert!(validate_sha_format(&"a".repeat(63)).is_err());
+    }
+
+    #[test]
+    fn cloud_endpoint_and_index_schema_are_pinned() {
+        assert_eq!(
+            REGISTRY_BASE,
+            "https://raw.githubusercontent.com/dev-five-git/hana-cloud/main"
+        );
+        let unsupported = String::from_utf8(uno_index()).unwrap().replacen(
+            "\"schemaVersion\": 1",
+            "\"schemaVersion\": 2",
+            1,
+        );
+        assert!(parse_index(unsupported.as_bytes()).is_err());
     }
 
     #[test]
@@ -695,6 +837,53 @@ mod tests {
             .expect("uno matches from local index");
         assert_eq!(matched.board_id, "arduino.uno-r3");
         assert_eq!(matched.confidence, Confidence::Exact);
+        let _ = fs::remove_dir_all(cache);
+    }
+
+    #[test]
+    fn resolves_hash_verified_hana_cloud_hex_from_manifest() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        let cache = temp_cache("resolve-firmware");
+        let hex = b":0400000012345678E8\n:00000001FF\n".to_vec();
+        let manifest = format!(
+            r#"{{"schemaVersion":2,"id":"arduino.uno-r3","firmware":{{"path":"boards/arduino-uno-r3.hex","format":"intel-hex","size":{},"sha256":"{}","fqbn":"arduino:avr:uno","source":{{"path":"boards/arduino-uno-r3.ino","sha256":"{}"}},"toolchain":{{"arduinoCli":"1.5.1","platform":"arduino:avr@1.8.8"}}}},"wiring":[{{"from":"D2","to":"Middle Button"}}]}}"#,
+            hex.len(),
+            sha256_hex(&hex),
+            "a".repeat(64),
+        )
+        .into_bytes();
+        let matched = UsbMatch {
+            board_id: "arduino.uno-r3".to_owned(),
+            board_name: "Arduino Uno R3".to_owned(),
+            confidence: Confidence::Exact,
+            manifest_path: "boards/arduino-uno-r3.json".to_owned(),
+            manifest_sha256: sha256_hex(&manifest),
+        };
+        let files = Mutex::new(HashMap::from([
+            ("boards/arduino-uno-r3.json".to_owned(), manifest),
+            ("boards/arduino-uno-r3.hex".to_owned(), hex.clone()),
+        ]));
+        let client = RegistryClient {
+            cache_dir: cache.clone(),
+            fetch: Box::new(move |path, max_bytes| {
+                files
+                    .lock()
+                    .unwrap()
+                    .get(path)
+                    .filter(|bytes| bytes.len() <= max_bytes)
+                    .cloned()
+                    .ok_or_else(|| RegistryError::Unavailable("테스트 파일 없음".to_owned()))
+            }),
+        };
+
+        let firmware = client
+            .resolve_firmware(&matched)
+            .expect("verified firmware");
+        assert_eq!(firmware.board_id, "arduino.uno-r3");
+        assert_eq!(firmware.fqbn, "arduino:avr:uno");
+        assert_eq!(firmware.hex_text.as_bytes(), hex);
         let _ = fs::remove_dir_all(cache);
     }
 }

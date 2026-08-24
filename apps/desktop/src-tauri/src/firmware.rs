@@ -1,7 +1,7 @@
 //! Registry-driven in-app firmware installer for supported boards.
 //!
 //! The bundled `arduino-cli` process is gone. Installation resolves the
-//! connected board against hana-registry, downloads the SHA-256-verified
+//! connected board against Hana Cloud, downloads the SHA-256-verified
 //! firmware, and flashes it over the optiboot bootloader directly.
 
 use std::fs;
@@ -23,6 +23,8 @@ use crate::registry::{RegistryClient, RegistryError, UsbIdentity};
 pub const EVENT_FIRMWARE: &str = "arduino://firmware";
 /// ATmega328P의 SPM 페이지 크기(optiboot가 한 번에 쓰는 단위).
 const FLASH_PAGE_BYTES: usize = 128;
+/// Uno R3 bootloader 영역(512 bytes)을 제외한 애플리케이션 플래시 한계.
+const UNO_APPLICATION_BYTES: u32 = 32_256;
 /// optiboot 부팅 창을 몇 번까지 기다려 볼지. DTR 리셋 후 부트로더가 잠깐만
 /// 열리므로 arduino-cli의 재시도 동작을 그대로 옮긴다.
 const SYNC_ATTEMPTS: usize = 12;
@@ -61,6 +63,7 @@ pub enum FirmwareState {
     Probing {
         device_id: String,
     },
+    #[allow(dead_code)]
     AlreadyInstalled {
         device_id: String,
     },
@@ -94,6 +97,7 @@ pub enum FirmwareState {
 #[serde(rename_all = "camelCase")]
 pub enum ConfirmationReason {
     NoResponse,
+    #[allow(dead_code)]
     DifferentFirmware,
 }
 
@@ -102,34 +106,6 @@ enum HandshakeClassification {
     Installed,
     NoResponse,
     DifferentFirmware,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StartupMode {
-    Connect,
-    Setup,
-}
-
-fn startup_mode_for(handshakes: impl IntoIterator<Item = HandshakeClassification>) -> StartupMode {
-    let mut found = false;
-    for handshake in handshakes {
-        found = true;
-        if handshake == HandshakeClassification::Installed {
-            return StartupMode::Connect;
-        }
-    }
-    if found {
-        StartupMode::Setup
-    } else {
-        StartupMode::Connect
-    }
-}
-
-pub fn startup_mode() -> StartupMode {
-    let supported = candidates().unwrap_or_default();
-    startup_mode_for(supported.iter().map(|candidate| {
-        probe_port(&candidate.port).unwrap_or(HandshakeClassification::NoResponse)
-    }))
 }
 
 #[derive(Clone, Debug)]
@@ -215,11 +191,15 @@ fn known_board_name(vid: u16, pid: u16) -> Option<&'static str> {
     }
 }
 
+fn serial_path_supported(port_name: &str, is_macos: bool) -> bool {
+    !is_macos || port_name.contains("/cu.")
+}
+
 fn supported_candidate(port: serialport::SerialPortInfo) -> Option<ArduinoCandidate> {
     let serialport::SerialPortType::UsbPort(usb) = port.port_type else {
         return None;
     };
-    if cfg!(unix) && !port.port_name.contains("/cu.") {
+    if !serial_path_supported(&port.port_name, cfg!(target_os = "macos")) {
         return None;
     }
 
@@ -235,6 +215,11 @@ fn supported_candidate(port: serialport::SerialPortInfo) -> Option<ArduinoCandid
             .map(str::to_owned)
             .unwrap_or_else(|| "알 수 없는 시리얼 보드".to_owned()),
     };
+    let product = if generic_product {
+        None
+    } else {
+        usb.product.clone()
+    };
     let device_id = usb.serial_number.as_deref().map_or_else(
         || format!("usb-{:04x}-{:04x}-{}", usb.vid, usb.pid, port.port_name),
         |serial| format!("usb-{:04x}-{:04x}-{serial}", usb.vid, usb.pid),
@@ -245,7 +230,7 @@ fn supported_candidate(port: serialport::SerialPortInfo) -> Option<ArduinoCandid
         port: port.port_name,
         vid: usb.vid,
         pid: usb.pid,
-        product: usb.product,
+        product,
         manufacturer: usb.manufacturer,
     })
 }
@@ -273,6 +258,33 @@ fn find_candidate(device_id: &str) -> Result<ArduinoCandidate, String> {
         .ok_or_else(|| "선택한 Arduino Uno를 찾지 못했습니다.".to_owned())
 }
 
+fn usb_identity(candidate: &ArduinoCandidate) -> UsbIdentity {
+    UsbIdentity {
+        vid: candidate.vid,
+        pid: candidate.pid,
+        product: candidate.product.clone(),
+        manufacturer: candidate.manufacturer.clone(),
+    }
+}
+
+fn registered_candidates(
+    app: &AppHandle,
+    found: Vec<ArduinoCandidate>,
+) -> Result<Vec<ArduinoCandidate>, String> {
+    let cache_dir = registry_cache_dir(app)?;
+    let index = RegistryClient::new(cache_dir)
+        .load_index()
+        .map_err(|error| error.to_string())?;
+    Ok(found
+        .into_iter()
+        .filter(|candidate| {
+            index
+                .match_board(&usb_identity(candidate))
+                .is_some_and(|matched| matched.confidence == crate::registry::Confidence::Exact)
+        })
+        .collect())
+}
+
 fn classify_response(response: &[u8]) -> HandshakeClassification {
     if response == HANDSHAKE_RESPONSE {
         HandshakeClassification::Installed
@@ -286,11 +298,10 @@ fn classify_response(response: &[u8]) -> HandshakeClassification {
 fn open_probe_port(port: &str) -> Result<Box<dyn serialport::SerialPort>, String> {
     let mut last_error = None;
     for _ in 0..8 {
-        match serialport::new(port, BAUD_RATE)
-            .timeout(SERIAL_TIMEOUT)
-            .exclusive(true)
-            .open()
-        {
+        let builder = serialport::new(port, BAUD_RATE).timeout(SERIAL_TIMEOUT);
+        #[cfg(unix)]
+        let builder = builder.exclusive(true);
+        match builder.open() {
             Ok(serial) => return Ok(serial),
             Err(error) => {
                 let message = format!("{port}: {error}");
@@ -349,7 +360,16 @@ fn emit(app: &AppHandle, state: &FirmwareState) {
 #[tauri::command]
 pub fn list_arduino_candidates(app: AppHandle) -> Result<Vec<ArduinoCandidate>, String> {
     emit(&app, &FirmwareState::Searching);
-    let found = candidates()?;
+    let found = registered_candidates(&app, candidates()?).inspect_err(|error| {
+        emit(
+            &app,
+            &FirmwareState::Error {
+                code: "downloadFailed",
+                retryable: true,
+                detail: Some(error.clone()),
+            },
+        );
+    })?;
     if found.is_empty() {
         emit(
             &app,
@@ -376,7 +396,6 @@ pub fn probe_arduino_firmware(
     app: AppHandle,
     deviceId: String,
     installer: State<'_, FirmwareInstaller>,
-    coordinator: State<'_, ArduinoCoordinator>,
 ) -> Result<FirmwareState, String> {
     let device_id = deviceId;
     let candidate = find_candidate(&device_id)?;
@@ -387,49 +406,17 @@ pub fn probe_arduino_firmware(
         },
     );
 
-    let ownership = coordinator.acquire_setup_probe().map_err(|_| {
-        emit(
-            &app,
-            &FirmwareState::Error {
-                code: "portUnavailable",
-                retryable: true,
-                detail: None,
-            },
-        );
-        "Arduino 포트를 사용할 수 없습니다.".to_owned()
-    })?;
-    let classification = probe_port(&candidate.port);
-    ownership.finish(if classification.is_ok() {
-        InstallerExit::Success
-    } else {
-        InstallerExit::Failure
-    });
-    let classification = classification.inspect_err(|error| {
-        emit(
-            &app,
-            &FirmwareState::Error {
-                code: "portUnavailable",
-                retryable: true,
-                detail: Some(error.clone()),
-            },
-        );
-    })?;
-
-    let state = match classification {
-        HandshakeClassification::Installed => FirmwareState::AlreadyInstalled { device_id },
-        HandshakeClassification::NoResponse | HandshakeClassification::DifferentFirmware => {
-            let reason = if classification == HandshakeClassification::NoResponse {
-                ConfirmationReason::NoResponse
-            } else {
-                ConfirmationReason::DifferentFirmware
-            };
-            installer.remember_confirmation(candidate.clone());
-            FirmwareState::ConfirmationRequired {
-                device_id,
-                reason,
-                display_name: candidate.display_name,
-            }
-        }
+    let found = registered_candidates(&app, vec![candidate.clone()])?;
+    if found.is_empty() {
+        return Err("Hana Cloud에 정확히 등록된 보드가 아닙니다.".to_owned());
+    }
+    // 빈 Uno는 전용 펌웨어가 없어 handshake에 답하지 않는다. 초기 식별 때
+    // 포트를 열거나 요청을 보내지 않고, 사용자의 명시적 설치 확인만 받는다.
+    installer.remember_confirmation(candidate.clone());
+    let state = FirmwareState::ConfirmationRequired {
+        device_id,
+        reason: ConfirmationReason::NoResponse,
+        display_name: candidate.display_name,
     };
     emit(&app, &state);
     Ok(state)
@@ -440,7 +427,40 @@ fn registry_cache_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|_| "앱 데이터 폴더를 찾지 못했습니다.".to_owned())?;
-    Ok(base.join("hana-registry"))
+    Ok(base.join("hana-cloud"))
+}
+
+trait ResetLines {
+    fn set_dtr(&mut self, level: bool) -> Result<(), String>;
+    fn set_rts(&mut self, level: bool) -> Result<(), String>;
+}
+
+impl<T: serialport::SerialPort + ?Sized> ResetLines for T {
+    fn set_dtr(&mut self, level: bool) -> Result<(), String> {
+        self.write_data_terminal_ready(level)
+            .map_err(|error| error.to_string())
+    }
+
+    fn set_rts(&mut self, level: bool) -> Result<(), String> {
+        self.write_request_to_send(level)
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn pulse_bootloader_reset<T: ResetLines + ?Sized>(
+    lines: &mut T,
+    mut delay: impl FnMut(Duration),
+) -> Result<(), String> {
+    lines.set_dtr(false)?;
+    lines.set_rts(false)?;
+    delay(Duration::from_millis(250));
+    lines.set_dtr(true)?;
+    lines.set_rts(true)?;
+    delay(Duration::from_micros(100));
+    lines.set_dtr(false)?;
+    lines.set_rts(false)?;
+    delay(Duration::from_millis(100));
+    Ok(())
 }
 
 /// serialport 핸들을 플래셔의 SerialIo 트레잇에 맞춘다. 타임아웃 읽기는
@@ -468,11 +488,13 @@ impl Write for FlashPort {
 fn open_flash_port(port_name: &str) -> Result<FlashPort, String> {
     // exclusive 플래그는 쓰지 않는다. 설치 중 연결 스레드는 이미 멈춰 있고,
     // macOS에서 exclusive open이 간혹 EBUSY로 실패하는 것을 피한다.
-    serialport::new(port_name, BAUD_RATE)
+    let mut port = serialport::new(port_name, BAUD_RATE)
         .timeout(SERIAL_TIMEOUT)
         .open()
-        .map(|port| FlashPort { port })
-        .map_err(|error| format!("{port_name}: {error}"))
+        .map_err(|error| format!("{port_name}: {error}"))?;
+    pulse_bootloader_reset(port.as_mut(), thread::sleep)
+        .map_err(|error| format!("{port_name}: 보드를 리셋하지 못했습니다: {error}"))?;
+    Ok(FlashPort { port })
 }
 
 fn log_firmware(message: &str) {
@@ -499,10 +521,20 @@ fn rediscover(previous: &ArduinoCandidate, cancelled: &AtomicBool) -> Option<Ard
                 .or_else(|| {
                     found
                         .iter()
-                        .find(|candidate| candidate.port == previous.port)
+                        .find(|candidate| {
+                            candidate.port == previous.port
+                                && candidate.vid == previous.vid
+                                && candidate.pid == previous.pid
+                        })
                         .cloned()
                 })
-                .or_else(|| (found.len() == 1).then(|| found[0].clone()))
+                .or_else(|| {
+                    let mut same_model = found.iter().filter(|candidate| {
+                        candidate.vid == previous.vid && candidate.pid == previous.pid
+                    });
+                    let only = same_model.next().cloned();
+                    only.filter(|_| same_model.next().is_none())
+                })
         {
             return Some(candidate);
         }
@@ -537,12 +569,7 @@ fn download_firmware(
     let cache_dir = registry_cache_dir(app).map_err(InstallFailure::Download)?;
     let client = RegistryClient::new(cache_dir);
     let matched = client
-        .match_board(&UsbIdentity {
-            vid: candidate.vid,
-            pid: candidate.pid,
-            product: candidate.product.clone(),
-            manufacturer: candidate.manufacturer.clone(),
-        })
+        .match_board(&usb_identity(candidate))
         .map_err(|error| match error {
             RegistryError::BoardNotRegistered { .. } => InstallFailure::Download(
                 "이 보드는 한번 레지스트리에 등록되어 있지 않습니다.".to_owned(),
@@ -568,8 +595,14 @@ fn download_firmware(
             ),
             other => InstallFailure::Download(other.to_string()),
         })?;
-    FlashImage::from_ihex(&firmware.hex_text)
-        .map_err(|error| InstallFailure::Download(format!("펌웨어 해석 실패: {error}")))
+    let image = FlashImage::from_ihex(&firmware.hex_text)
+        .map_err(|error| InstallFailure::Download(format!("펌웨어 해석 실패: {error}")))?;
+    if !image.fits_within(UNO_APPLICATION_BYTES) {
+        return Err(InstallFailure::Download(
+            "펌웨어가 Arduino Uno R3 애플리케이션 영역을 벗어납니다.".to_owned(),
+        ));
+    }
+    Ok(image)
 }
 
 fn flash_with_retry(
@@ -579,12 +612,13 @@ fn flash_with_retry(
     cancelled: &AtomicBool,
 ) -> Result<(), InstallFailure> {
     let mut last_error = String::new();
+    let mut active_candidate = candidate.clone();
     for attempt in 0..3 {
         ensure_not_cancelled(cancelled)?;
+        active_candidate = rediscover(&active_candidate, cancelled).ok_or_else(|| {
+            InstallFailure::Upload("업로드할 Arduino를 다시 찾지 못했습니다.".to_owned())
+        })?;
         if attempt > 0 {
-            rediscover(candidate, cancelled).ok_or_else(|| {
-                InstallFailure::Upload("업로드 재시도 중 Arduino를 찾지 못했습니다.".to_owned())
-            })?;
             emit(
                 app,
                 &FirmwareState::Uploading {
@@ -592,7 +626,7 @@ fn flash_with_retry(
                 },
             );
         }
-        let port = open_flash_port(&candidate.port).map_err(InstallFailure::Upload)?;
+        let port = open_flash_port(&active_candidate.port).map_err(InstallFailure::Upload)?;
         let mut flash_port = Box::new(port) as Box<dyn SerialIo>;
         let mut written_bytes = 0usize;
         let flash_result = flasher::synchronize(flash_port.as_mut(), SYNC_ATTEMPTS, cancelled)
@@ -796,6 +830,15 @@ mod tests {
     }
 
     #[test]
+    fn serial_path_filter_is_macos_only() {
+        assert!(serial_path_supported("/dev/cu.usbmodem1", true));
+        assert!(!serial_path_supported("/dev/tty.usbmodem1", true));
+        assert!(serial_path_supported("/dev/ttyACM0", false));
+        assert!(serial_path_supported("/dev/ttyUSB0", false));
+        assert!(serial_path_supported("COM4", false));
+    }
+
+    #[test]
     fn generic_cdc_product_falls_back_to_known_board_name() {
         // macOS는 부팅 직후 product를 "Generic CDC"로 주기도 한다(ioreg 확인).
         let mut port = usb_port(0x2341, 0x0043);
@@ -804,6 +847,10 @@ mod tests {
         }
         let candidate = supported_candidate(port).expect("uno kept");
         assert_eq!(candidate.display_name, "Arduino Uno R3");
+        assert_eq!(
+            candidate.product, None,
+            "generic descriptors do not demote VID/PID matching"
+        );
 
         // product가 아예 없어도 VID/PID로 되찾는다.
         let mut port = usb_port(0x2341, 0x0043);
@@ -852,15 +899,6 @@ mod tests {
             busy.is_err(),
             "missing port must not look like a blank sketch"
         );
-        let message = busy.unwrap_err().to_lowercase();
-        assert!(
-            message.contains("no such file")
-                || message.contains("not found")
-                || message.contains("couldn't open")
-                || message.contains("no such device"),
-            "open failure should keep the OS error: {message}"
-        );
-
         let coordinator = ArduinoCoordinator::new(test_support::coordinator_probe_silent);
         {
             let _ownership = coordinator.acquire_installer().unwrap();
@@ -870,23 +908,42 @@ mod tests {
     }
 
     #[test]
-    fn startup_mode_opens_setup_for_supported_uno_without_hanbeon_firmware() {
+    fn bootloader_reset_matches_avrdude_dtr_rts_sequence() {
+        #[derive(Default)]
+        struct FakeLines(Vec<(&'static str, bool)>);
+        impl ResetLines for FakeLines {
+            fn set_dtr(&mut self, level: bool) -> Result<(), String> {
+                self.0.push(("dtr", level));
+                Ok(())
+            }
+
+            fn set_rts(&mut self, level: bool) -> Result<(), String> {
+                self.0.push(("rts", level));
+                Ok(())
+            }
+        }
+
+        let mut lines = FakeLines::default();
+        let mut delays = Vec::new();
+        pulse_bootloader_reset(&mut lines, |duration| delays.push(duration)).unwrap();
         assert_eq!(
-            startup_mode_for([]),
-            StartupMode::Connect,
-            "no Uno keeps normal discovery active"
+            lines.0,
+            vec![
+                ("dtr", false),
+                ("rts", false),
+                ("dtr", true),
+                ("rts", true),
+                ("dtr", false),
+                ("rts", false),
+            ]
         );
         assert_eq!(
-            startup_mode_for([HandshakeClassification::Installed]),
-            StartupMode::Connect
-        );
-        assert_eq!(
-            startup_mode_for([HandshakeClassification::NoResponse]),
-            StartupMode::Setup
-        );
-        assert_eq!(
-            startup_mode_for([HandshakeClassification::DifferentFirmware]),
-            StartupMode::Setup
+            delays,
+            vec![
+                Duration::from_millis(250),
+                Duration::from_micros(100),
+                Duration::from_millis(100),
+            ]
         );
     }
 

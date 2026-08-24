@@ -8,6 +8,7 @@
 //! All sequencing is pure and unit-tested against a scripted fake serial port;
 //! only the thin `SerialIo` impl touches real hardware.
 
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -34,9 +35,14 @@ impl FlashImage {
                 .map_err(|error| format!("{line_number}번째 줄: {error}"))?;
             match record.record_type {
                 0x00 => {
-                    let base = (upper | u32::from(record.offset)) & 0xFFFF;
+                    let base = upper.checked_add(u32::from(record.offset)).ok_or_else(|| {
+                        format!("{line_number}번째 줄: 주소가 범위를 벗어났습니다")
+                    })?;
                     for (index, byte) in record.data.iter().enumerate() {
-                        bytes.push((base + index as u32, *byte));
+                        let address = base.checked_add(index as u32).ok_or_else(|| {
+                            format!("{line_number}번째 줄: 주소가 범위를 벗어났습니다")
+                        })?;
+                        bytes.push((address, *byte));
                     }
                 }
                 0x01 => break,
@@ -99,6 +105,61 @@ impl FlashImage {
 
     pub fn total_bytes(&self) -> usize {
         self.pages.iter().map(|(_, data)| data.len()).sum()
+    }
+
+    pub fn highest_byte_address(&self) -> Option<u32> {
+        self.pages
+            .iter()
+            .filter(|(_, data)| !data.is_empty())
+            .map(|(word_address, data)| u32::from(*word_address) * 2 + data.len() as u32 - 1)
+            .max()
+    }
+
+    pub fn fits_within(&self, byte_limit: u32) -> bool {
+        self.highest_byte_address()
+            .is_some_and(|address| address < byte_limit)
+    }
+
+    fn physical_pages(&self, page_size: usize) -> Result<Vec<(u16, Vec<u8>, usize)>, FlashError> {
+        if page_size == 0 || !page_size.is_multiple_of(2) {
+            return Err(FlashError::Protocol(
+                "플래시 페이지 크기가 올바르지 않습니다".to_owned(),
+            ));
+        }
+        let page_size_u32 = u32::try_from(page_size)
+            .map_err(|_| FlashError::Protocol("플래시 페이지가 너무 큽니다".to_owned()))?;
+        let mut pages: BTreeMap<u32, (Vec<Option<u8>>, usize)> = BTreeMap::new();
+        for (word_address, data) in &self.pages {
+            let start = u32::from(*word_address) * 2;
+            for (offset, byte) in data.iter().copied().enumerate() {
+                let address = start.checked_add(offset as u32).ok_or_else(|| {
+                    FlashError::Protocol("펌웨어 주소가 범위를 벗어났습니다".to_owned())
+                })?;
+                let page_start = address / page_size_u32 * page_size_u32;
+                let (page, source_bytes) = pages
+                    .entry(page_start)
+                    .or_insert_with(|| (vec![None; page_size], 0));
+                let slot = &mut page[(address - page_start) as usize];
+                if slot.replace(byte).is_some() {
+                    return Err(FlashError::Protocol("펌웨어 주소가 중복됩니다".to_owned()));
+                }
+                *source_bytes += 1;
+            }
+        }
+
+        pages
+            .into_iter()
+            .map(|(page_start, (page, source_bytes))| {
+                let word_address = u16::try_from(page_start / 2).map_err(|_| {
+                    FlashError::Protocol("펌웨어 주소가 범위를 벗어났습니다".to_owned())
+                })?;
+                Ok((
+                    word_address,
+                    page.into_iter().map(|byte| byte.unwrap_or(0xFF)).collect(),
+                    source_bytes,
+                ))
+            })
+            .collect()
     }
 }
 
@@ -304,7 +365,7 @@ pub fn synchronize(
     Err(FlashError::Sync)
 }
 
-/// Full optiboot programming session: enter, erase, write, verify-by-signature,
+/// Full optiboot programming session: enter, verify target, erase, write,
 /// leave. Page writes use 128-byte pages (ATmega328P word-page 64 words).
 pub fn program(
     port: &mut dyn SerialIo,
@@ -313,41 +374,36 @@ pub fn program(
     cancelled: &AtomicBool,
     progress: &mut dyn FnMut(usize),
 ) -> Result<(), FlashError> {
+    let pages = image.physical_pages(page_size)?;
     command(port, STK_ENTER_PROGMODE, &[], 0, cancelled)?;
-    command(port, STK_CHIP_ERASE, &[], 0, cancelled)?;
-
-    let total = image.total_bytes();
-    let mut written = 0usize;
-    for &(page_start_word, ref payload) in image.pages() {
-        // 연속 데이터는 128바이트 단위로 잘라 올린다. 청크마다 STK word 주소를
-        // 절반씩(page_size/2 word) 증가시켜야 한다. 고정 주소를 반복 쓰면 두
-        // 번째 청크부터 앞부분을 덮어써서 펌웨어가 깨진다(실기기에서 재현).
-        for (chunk_index, chunk) in payload.chunks(page_size).enumerate() {
-            let word_address = page_start_word + (chunk_index * page_size / 2) as u16;
-            // optiboot는 주소를 little-endian으로 읽고 word×2로 되돌린다.
-            command(
-                port,
-                STK_LOAD_ADDRESS,
-                &[(word_address & 0xFF) as u8, (word_address >> 8) as u8],
-                0,
-                cancelled,
-            )?;
-            // 페이지 길이는 [상위, 하위]; SPM_PAGESIZE≤255 기기에서 상위는
-            // 버려지고 하위가 길이가 된다(optiboot GETLENGTH).
-            let mut request = vec![(chunk.len() >> 8) as u8, chunk.len() as u8];
-            request.extend_from_slice(b"F");
-            request.extend_from_slice(chunk);
-            command(port, STK_PROGRAM_PAGE, &request, 0, cancelled)?;
-            written += chunk.len();
-            progress(written.min(total));
-        }
-    }
-
     let signature = command(port, STK_READ_SIGN, &[], 3, cancelled)?;
     if signature != EXPECTED_SIGNATURE {
         return Err(FlashError::Protocol(format!(
             "서명 불일치: {signature:02x?}"
         )));
+    }
+    command(port, STK_CHIP_ERASE, &[], 0, cancelled)?;
+
+    let total = image.total_bytes();
+    let mut written = 0usize;
+    for (word_address, page, source_bytes) in pages {
+        // Optiboot는 PROGRAM_PAGE마다 물리 페이지 전체를 지운다. 따라서 HEX의
+        // sparse record를 먼저 정렬·병합하고, 정렬된 페이지를 정확히 한 번 쓴다.
+        command(
+            port,
+            STK_LOAD_ADDRESS,
+            &[(word_address & 0xFF) as u8, (word_address >> 8) as u8],
+            0,
+            cancelled,
+        )?;
+        // 페이지 길이는 [상위, 하위]; SPM_PAGESIZE≤255 기기에서 상위는
+        // 버려지고 하위가 길이가 된다(optiboot GETLENGTH).
+        let mut request = vec![(page.len() >> 8) as u8, page.len() as u8];
+        request.extend_from_slice(b"F");
+        request.extend_from_slice(&page);
+        command(port, STK_PROGRAM_PAGE, &request, 0, cancelled)?;
+        written += source_bytes;
+        progress(written.min(total));
     }
 
     command(port, STK_LEAVE_PROGMODE, &[], 0, cancelled)?;
@@ -455,7 +511,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn multi_chunk_page_advances_stk_address_per_chunk() {
         // 256바이트 연속 이미지: 128바이트 청크 2개. 두 번째 청크의 LOAD_ADDRESS는
         // word 주소가 64(128/2) 증가한 0x0040이어야 한다. 고정 주소를 반복 쓰면
@@ -465,7 +520,7 @@ mod tests {
         let data: Vec<u8> = (0..256).map(|i| i as u8).collect();
         // ihex 한 레코드는 최대 255바이트라 128바이트 2레코드로 구성한다.
         let record = ":80000000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7FC0\n:80008000808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBFC0C1C2C3C4C5C6C7C8C9CACBCCCDCECFD0D1D2D3D4D5D6D7D8D9DADBDCDDDEDFE0E1E2E3E4E5E6E7E8E9EAEBECEDEEEFF0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF40\n:00000001FF\n";
-        let image = FlashImage::from_ihex(&record).unwrap();
+        let image = FlashImage::from_ihex(record).unwrap();
         assert_eq!(image.total_bytes(), 256);
 
         let expected_chunks: Vec<(u8, u8)> = vec![(0x00, 0x00), (0x40, 0x00)];
@@ -480,6 +535,7 @@ mod tests {
 
         let mut port = FakePort::new(log_tx)
             .expect(&[STK_ENTER_PROGMODE, STK_CRC_EOP], &OK_RESPONSE)
+            .expect(&[STK_READ_SIGN, STK_CRC_EOP], &SIGNATURE_RESPONSE)
             .expect(&[STK_CHIP_ERASE, STK_CRC_EOP], &OK_RESPONSE)
             .expect(
                 &[
@@ -501,37 +557,27 @@ mod tests {
                 &OK_RESPONSE,
             )
             .expect(&page_frames[1], &OK_RESPONSE)
-            .expect(&[STK_READ_SIGN, STK_CRC_EOP], &SIGNATURE_RESPONSE)
             .expect(&[STK_LEAVE_PROGMODE, STK_CRC_EOP], &OK_RESPONSE);
 
         let result = program(&mut port, &image, 128, &cancelled, &mut |_| {});
         assert_eq!(result, Ok(()));
     }
 
+    #[test]
     fn full_program_session_matches_expected_frames() {
         let cancelled = AtomicBool::new(false);
         let (log_tx, _log_rx) = mpsc::channel();
         let image = FlashImage::from_ihex(":0400000012345678E8\n:00000001FF\n").unwrap();
+        let mut program_frame = vec![STK_PROGRAM_PAGE, 0x00, 0x80, b'F', 0x12, 0x34, 0x56, 0x78];
+        program_frame.resize(4 + 128, 0xFF);
+        program_frame.push(STK_CRC_EOP);
 
         let mut port = FakePort::new(log_tx)
             .expect(&[STK_ENTER_PROGMODE, STK_CRC_EOP], &OK_RESPONSE)
+            .expect(&[STK_READ_SIGN, STK_CRC_EOP], &SIGNATURE_RESPONSE)
             .expect(&[STK_CHIP_ERASE, STK_CRC_EOP], &OK_RESPONSE)
             .expect(&[STK_LOAD_ADDRESS, 0x00, 0x00, STK_CRC_EOP], &OK_RESPONSE)
-            .expect(
-                &[
-                    STK_PROGRAM_PAGE,
-                    0x00,
-                    0x04,
-                    b'F',
-                    0x12,
-                    0x34,
-                    0x56,
-                    0x78,
-                    STK_CRC_EOP,
-                ],
-                &OK_RESPONSE,
-            )
-            .expect(&[STK_READ_SIGN, STK_CRC_EOP], &SIGNATURE_RESPONSE)
+            .expect(&program_frame, &OK_RESPONSE)
             .expect(&[STK_LEAVE_PROGMODE, STK_CRC_EOP], &OK_RESPONSE);
 
         let mut progress_calls = Vec::new();
@@ -550,26 +596,48 @@ mod tests {
         let bad_signature = vec![STK_INSYNC, 0x1E, 0x95, 0x11, STK_OK];
         let mut port = FakePort::new(log_tx)
             .expect(&[STK_ENTER_PROGMODE, STK_CRC_EOP], &OK_RESPONSE)
-            .expect(&[STK_CHIP_ERASE, STK_CRC_EOP], &OK_RESPONSE)
-            .expect(&[STK_LOAD_ADDRESS, 0x00, 0x00, STK_CRC_EOP], &OK_RESPONSE)
-            .expect(
-                &[
-                    STK_PROGRAM_PAGE,
-                    0x00,
-                    0x04,
-                    b'F',
-                    0x12,
-                    0x34,
-                    0x56,
-                    0x78,
-                    STK_CRC_EOP,
-                ],
-                &OK_RESPONSE,
-            )
             .expect(&[STK_READ_SIGN, STK_CRC_EOP], &bad_signature);
 
         let result = program(&mut port, &image, 128, &cancelled, &mut |_| {});
         assert!(matches!(result, Err(FlashError::Protocol(message)) if message.contains("서명")));
+        assert!(
+            port.expected_writes.is_empty(),
+            "signature mismatch must stop before erase"
+        );
+    }
+
+    #[test]
+    fn ihex_preserves_extended_linear_addresses_and_rejects_uno_overflow() {
+        let far = FlashImage::from_ihex(":020000040001F9\n:020000001234B8\n:00000001FF\n")
+            .expect("valid extended-linear-address file");
+        assert_eq!(far.highest_byte_address(), Some(0x1_0001));
+        assert!(!far.fits_within(32_256));
+    }
+
+    #[test]
+    fn sparse_records_in_one_flash_page_are_assembled_once() {
+        let image =
+            FlashImage::from_ihex(":020000001234B8\n:02001000567820\n:00000001FF\n").unwrap();
+        let pages = image.physical_pages(128).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].0, 0, "aligned STK word address");
+        assert_eq!(pages[0].1.len(), 128);
+        assert_eq!(&pages[0].1[0..2], &[0x12, 0x34]);
+        assert!(pages[0].1[2..16].iter().all(|byte| *byte == 0xFF));
+        assert_eq!(&pages[0].1[16..18], &[0x56, 0x78]);
+        assert_eq!(pages[0].2, 4, "progress counts source bytes, not padding");
+    }
+
+    #[test]
+    fn record_crossing_page_boundary_is_split_into_aligned_pages() {
+        let image = FlashImage::from_ihex(":04007E00123456786A\n:00000001FF\n").unwrap();
+        let pages = image.physical_pages(128).unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].0, 0);
+        assert_eq!(&pages[0].1[126..128], &[0x12, 0x34]);
+        assert_eq!(pages[1].0, 64, "byte 128 is STK word address 64");
+        assert_eq!(&pages[1].1[0..2], &[0x56, 0x78]);
+        assert_eq!((pages[0].2, pages[1].2), (2, 2));
     }
 
     #[test]

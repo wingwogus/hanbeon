@@ -152,11 +152,7 @@ pub fn run() {
                 profile.max_interval_ms = profile.max_interval_ms.max(interval_ms);
                 profile.sanitize();
             }
-
-            let arduino_startup = firmware::startup_mode();
-            if arduino_startup == firmware::StartupMode::Setup {
-                profile.onboarded = false;
-            }
+            let needs_onboarding = !profile.onboarded;
 
             // 창 배치는 프로필을 읽은 다음이어야 한다. 사용자가 옮겨 둔 위치를
             // 모른 채 먼저 띄우면 기본 위치에서 한 번 튄 뒤에 제자리를 찾는다.
@@ -256,11 +252,10 @@ pub fn run() {
                     },
                 )
             };
-            let native_switch = if arduino_startup == firmware::StartupMode::Setup {
-                if let Some(floating) = app.get_webview_window("floating") {
-                    floating.hide()?;
-                }
-                window::show_settings(app.handle())?;
+            // 새 보드는 아직 Hana 펌웨어가 없어 handshake에 답할 수 없다. 최초
+            // 온보딩 동안에는 포트를 열지 않고 설치기가 명시적으로 시작될 때까지
+            // 소유권을 보류한다. 설치가 끝나면 coordinator가 연결 worker를 시작한다.
+            let native_switch = if needs_onboarding {
                 arduino::ArduinoCoordinator::for_installer(spawn_switch)
             } else {
                 arduino::ArduinoCoordinator::new(spawn_switch)

@@ -161,7 +161,7 @@ mock.module('@/components/settings/SwitchTester', () => ({
 }))
 
 mock.module('@/lib/format', () => ({
-  formatSeconds: (ms: number) => `${ms}ms`,
+  formatSeconds: (ms: number) => `${(ms / 1000).toFixed(1)}초`,
 }))
 
 mock.module('@/lib/profile', () => ({
@@ -615,7 +615,7 @@ describe('Onboarding keeps firmware setup before switch testing', () => {
     })
     expect(textOf(view.container)).toInclude('속도를 맞춥니다')
     await act(async () => {
-      fireEvent.click(buttonNamed(view.container, '주사 속도 1800ms')!)
+      fireEvent.click(buttonNamed(view.container, '주사 속도 1.8초')!)
     })
     await act(async () => {
       fireEvent.click(buttonNamed(view.container, '다음')!)
