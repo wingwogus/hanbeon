@@ -13,14 +13,14 @@ function messageOf(element: ReactElement) {
 }
 
 describe('StatusLine', () => {
-  it('알릴 것이 없으면 현재 속도를 보여준다', () => {
+  it('알림이 없으면 연결을 기다려도 현재 속도를 보여준다', () => {
     const line = StatusLine({
       intervalMs: 2500,
       mode: 'scanning',
       notice: null,
     })
     expect(propsOf(line)).toHaveProperty('data-state', 'waiting')
-    expect(messageOf(line)).toBe('스위치를 연결해 주세요')
+    expect(messageOf(line)).toBe('2.5초마다')
   })
 
   it('간격이 바뀌면 그 이유를 같은 자리에 띄운다', () => {

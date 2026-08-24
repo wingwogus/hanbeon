@@ -11,6 +11,8 @@ mod app_registry;
 pub mod arduino;
 mod audio;
 mod emit;
+mod firmware;
+pub mod flasher;
 pub mod focused_application;
 mod foreground;
 mod input;
@@ -19,6 +21,7 @@ mod led;
 mod occlusion;
 mod preset;
 mod profile;
+pub mod registry;
 mod scan;
 mod shortcut;
 mod tray;
@@ -126,7 +129,10 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn close_settings(app: AppHandle) -> Result<(), String> {
-    window::hide_settings(&app)
+    window::hide_settings(&app)?;
+    // 설정(또는 온보딩)이 닫히면 스캔 오버레이가 곧바로 보여야 한다.
+    // 설치 모드에서 숨겨진 floating도 이 호출로 되살아난다.
+    window::show_floating(&app)
 }
 
 pub fn run() {
@@ -146,6 +152,7 @@ pub fn run() {
                 profile.max_interval_ms = profile.max_interval_ms.max(interval_ms);
                 profile.sanitize();
             }
+            let needs_onboarding = !profile.onboarded;
 
             // 창 배치는 프로필을 읽은 다음이어야 한다. 사용자가 옮겨 둔 위치를
             // 모른 채 먼저 띄우면 기본 위치에서 한 번 튄 뒤에 제자리를 찾는다.
@@ -213,32 +220,48 @@ pub fn run() {
             // with the HID/F13 fallback below; Accessibility is used only later
             // when Scanner::handle injects into another app.
             let native_app = app.handle().clone();
-            let lifecycle_app = app.handle().clone();
             let native_detector = Arc::clone(&detector);
             let native_scanner = scanner.clone();
-            let native_switch = arduino::ArduinoSwitch::spawn(
-                arduino::ReconnectPolicy::default(),
-                move |event| {
-                    if std::env::var("HANBEON_LOG").is_ok() {
-                        eprintln!("[arduino] lifecycle: {event:?}");
-                    }
-                    if let Err(error) = lifecycle_app.emit(arduino::EVENT_LIFECYCLE, event) {
-                        eprintln!("Arduino lifecycle event를 보내지 못했습니다. {error}");
-                    }
-                },
-                move |event| {
-                    arduino::route_switch_event(
-                        &native_detector,
-                        event,
-                        Instant::now(),
-                        |judgement| {
-                            input::announce(&native_app, judgement);
-                            native_scanner.handle(&native_app, judgement);
-                        },
-                    );
-                },
-            );
+            let spawn_switch = move || {
+                let lifecycle_app = native_app.clone();
+                let switch_app = native_app.clone();
+                let switch_detector = Arc::clone(&native_detector);
+                let switch_scanner = native_scanner.clone();
+                arduino::ArduinoSwitch::spawn(
+                    arduino::ReconnectPolicy::default(),
+                    move |event| {
+                        if std::env::var("HANBEON_LOG").is_ok() {
+                            eprintln!("[arduino] lifecycle: {event:?}");
+                        }
+                        if let Err(error) =
+                            lifecycle_app.emit(arduino::EVENT_LIFECYCLE, event)
+                        {
+                            eprintln!("Arduino lifecycle event를 보내지 못했습니다. {error}");
+                        }
+                    },
+                    move |event| {
+                        arduino::route_switch_event(
+                            &switch_detector,
+                            event,
+                            Instant::now(),
+                            |judgement| {
+                                input::announce(&switch_app, judgement);
+                                switch_scanner.handle(&switch_app, judgement);
+                            },
+                        );
+                    },
+                )
+            };
+            // 새 보드는 아직 Hana 펌웨어가 없어 handshake에 답할 수 없다. 최초
+            // 온보딩 동안에는 포트를 열지 않고 설치기가 명시적으로 시작될 때까지
+            // 소유권을 보류한다. 설치가 끝나면 coordinator가 연결 worker를 시작한다.
+            let native_switch = if needs_onboarding {
+                arduino::ArduinoCoordinator::for_installer(spawn_switch)
+            } else {
+                arduino::ArduinoCoordinator::new(spawn_switch)
+            };
             app.manage(native_switch);
+            app.manage(firmware::FirmwareInstaller::default());
 
             let registered = input::register(
                 app.handle(),
@@ -288,7 +311,11 @@ pub fn run() {
             save_profile,
             open_settings,
             close_settings,
-            log_directory
+            log_directory,
+            firmware::list_arduino_candidates,
+            firmware::probe_arduino_firmware,
+            firmware::begin_firmware_install,
+            firmware::cancel_firmware_install
         ])
         .build(tauri::generate_context!())
         .expect("한번 앱을 시작하지 못했습니다");
