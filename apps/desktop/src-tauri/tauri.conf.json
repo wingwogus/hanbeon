@@ -62,9 +62,6 @@
       "icons/128x128.png",
       "icons/128x128@2x.png"
     ],
-    "externalBin": [
-      "binaries/arduino-cli"
-    ],
     "macOS": {
       "minimumSystemVersion": "10.15"
     },

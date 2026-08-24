@@ -355,6 +355,7 @@ pub enum InstallerExit {
 struct CoordinatorState {
     owner: ArduinoOwner,
     switch: Option<ArduinoSwitch>,
+    installer_lease_alive: bool,
 }
 
 struct CoordinatorInner {
@@ -383,6 +384,7 @@ impl ArduinoCoordinator {
                 state: Mutex::new(CoordinatorState {
                     owner: ArduinoOwner::Connection,
                     switch: Some(switch),
+                    installer_lease_alive: false,
                 }),
                 spawn_switch: Box::new(spawn_switch),
             }),
@@ -398,6 +400,7 @@ impl ArduinoCoordinator {
                 state: Mutex::new(CoordinatorState {
                     owner: ArduinoOwner::Installer,
                     switch: None,
+                    installer_lease_alive: false,
                 }),
                 spawn_switch: Box::new(spawn_switch),
             }),
@@ -419,33 +422,35 @@ impl ArduinoCoordinator {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.owner == ArduinoOwner::Installer && state.switch.is_none() {
-                return Ok(InstallerOwnership {
-                    inner: Arc::clone(&self.inner),
-                    active: true,
-                    restore_connection: true,
-                });
-            }
-            if state.owner != ArduinoOwner::Connection {
+            if state.owner == ArduinoOwner::Installer && state.installer_lease_alive {
                 return Err(CoordinatorError::InstallerActive);
             }
-            state.owner = ArduinoOwner::Idle;
-            state
-                .switch
-                .take()
-                .expect("connection owner must hold a switch")
+            if state.owner == ArduinoOwner::Installer {
+                state.installer_lease_alive = true;
+                None
+            } else {
+                if state.owner != ArduinoOwner::Connection {
+                    return Err(CoordinatorError::InstallerActive);
+                }
+                state.owner = ArduinoOwner::Idle;
+                state.switch.take()
+            }
         };
 
         // The global sender must disappear before waiting for the worker. This
         // prevents scanner output from entering a transport that is shutting down.
         unregister_active_output();
-        switch.stop();
+        if let Some(switch) = switch {
+            switch.stop();
+        }
 
-        self.inner
+        let mut state = self
+            .inner
             .state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .owner = ArduinoOwner::Installer;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.owner = ArduinoOwner::Installer;
+        state.installer_lease_alive = true;
         Ok(InstallerOwnership {
             inner: Arc::clone(&self.inner),
             active: true,
@@ -454,12 +459,13 @@ impl ArduinoCoordinator {
     }
 
     pub fn acquire_setup_probe(&self) -> Result<InstallerOwnership, CoordinatorError> {
-        let state = self
+        let mut state = self
             .inner
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.owner == ArduinoOwner::Installer && state.switch.is_none() {
+        if state.owner == ArduinoOwner::Installer && !state.installer_lease_alive {
+            state.installer_lease_alive = true;
             return Ok(InstallerOwnership {
                 inner: Arc::clone(&self.inner),
                 active: true,
@@ -479,6 +485,7 @@ fn resume_connection(inner: &CoordinatorInner) {
     if state.owner != ArduinoOwner::Installer {
         return;
     }
+    state.installer_lease_alive = false;
     state.owner = ArduinoOwner::Idle;
     let switch = (inner.spawn_switch)();
     state.switch = Some(switch);
@@ -499,6 +506,11 @@ impl InstallerOwnership {
 
     pub fn finish(mut self, _exit: InstallerExit) {
         self.active = false;
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .installer_lease_alive = false;
         if self.restore_connection {
             resume_connection(&self.inner);
         }
@@ -507,8 +519,15 @@ impl InstallerOwnership {
 
 impl Drop for InstallerOwnership {
     fn drop(&mut self) {
-        if self.active && self.restore_connection {
-            resume_connection(&self.inner);
+        if self.active {
+            self.inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .installer_lease_alive = false;
+            if self.restore_connection {
+                resume_connection(&self.inner);
+            }
         }
     }
 }
@@ -1044,6 +1063,13 @@ mod tests {
             events_rx.recv().unwrap(),
             test_support::CoordinatorEvent::Spawned(2)
         );
+    }
+
+    #[test]
+    fn setup_mode_allows_installer_acquisition() {
+        let coordinator = ArduinoCoordinator::for_installer(test_support::coordinator_probe_silent);
+        let ownership = coordinator.acquire_installer().unwrap();
+        assert_eq!(ownership.owner(), ArduinoOwner::Installer);
     }
 
     #[test]

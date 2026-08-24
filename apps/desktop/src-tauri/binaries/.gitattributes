@@ -1,2 +1,0 @@
-# Keep vendored Arduino CLI binaries byte-identical across checkouts.
-arduino-cli-* binary

@@ -23,6 +23,7 @@ export type ArduinoCandidate = {
 export type FirmwareErrorCode =
   | 'notFound'
   | 'portUnavailable'
+  | 'downloadFailed'
   | 'uploadFailed'
   | 'verifyFailed'
 
@@ -80,6 +81,7 @@ export const FIRMWARE_COPY = {
 export const FIRMWARE_ERROR_COPY: Record<FirmwareErrorCode, string> = {
   notFound: 'Arduino를 찾지 못했습니다',
   portUnavailable: '포트를 사용할 수 없습니다',
+  downloadFailed: '펌웨어를 내려받지 못했습니다',
   uploadFailed: '펌웨어 전송에 실패했습니다',
   verifyFailed: '설치는 끝났지만 펌웨어 확인에 실패했습니다',
 }
