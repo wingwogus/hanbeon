@@ -186,6 +186,8 @@ export function asFirmwareState(payload: unknown): FirmwareState | null {
   }
   if (deviceId) {
     record.deviceId = deviceId
+    // 정규화 계약: 소비자는 camelCase만 본다. 구버전 snake_case 키는 제거한다.
+    delete record.device_id
   }
   return record as FirmwareState
 }

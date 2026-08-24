@@ -162,15 +162,15 @@ describe('Arduino firmware lifecycle contract', () => {
       state: 'searching',
     })
     expect(
+      // Rust 이벤트가 snake_case로 오던 구버전 호환 경로를 검증한다.
       asFirmwareState({
         state: 'confirmationRequired',
         device_id: 'candidate-1',
         reason: 'noResponse',
-      }),
+      } as Record<string, unknown>),
     ).toEqual({
       state: 'confirmationRequired',
       deviceId: 'candidate-1',
-      device_id: 'candidate-1',
       reason: 'noResponse',
     })
     expect(
