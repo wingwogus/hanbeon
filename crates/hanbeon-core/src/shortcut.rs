@@ -7,30 +7,9 @@
 //! 자기가 익힌 자리에서 다른 동작이 나오는 것을 겪게 되고, 그게 왜인지 알
 //! 방법이 없다. 프리셋을 만들 때 걸러 내고, 걸러졌다는 사실을 남긴다.
 
-use enigo::Key;
-use serde::Serialize;
-
-/// 함께 누르는 보조키.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Modifier {
-    /// macOS의 명령 키.
-    Meta,
-    Control,
-    Alt,
-    Shift,
-}
+pub use crate::key::{Key, Modifier};
 
 impl Modifier {
-    pub fn key(self) -> Key {
-        match self {
-            Modifier::Meta => Key::Meta,
-            Modifier::Control => Key::Control,
-            Modifier::Alt => Key::Alt,
-            Modifier::Shift => Key::Shift,
-        }
-    }
-
     fn parse(token: &str) -> Option<Self> {
         match token {
             "cmd" | "command" | "meta" | "super" => Some(Modifier::Meta),
@@ -56,12 +35,12 @@ fn plain_key(token: &str) -> Option<Key> {
         "pageup" | "pgup" => Key::PageUp,
         "home" => Key::Home,
         "end" => Key::End,
-        "up" => Key::UpArrow,
-        "down" => Key::DownArrow,
-        "left" => Key::LeftArrow,
-        "right" => Key::RightArrow,
+        "up" => Key::Up,
+        "down" => Key::Down,
+        "left" => Key::Left,
+        "right" => Key::Right,
         "space" => Key::Space,
-        "enter" | "return" => Key::Return,
+        "enter" | "return" => Key::Enter,
         "tab" => Key::Tab,
         "escape" | "esc" => Key::Escape,
         // 미디어 키는 앱 전용 단축키가 아니라 시스템이 처리한다. 그래서 어떤
@@ -97,7 +76,7 @@ pub fn parse(spec: &str) -> Option<Shortcut> {
         None => {
             let mut chars = last.chars();
             match (chars.next(), chars.next()) {
-                (Some(single), None) => Key::Unicode(single),
+                (Some(single), None) => Key::Char(single),
                 _ => return None,
             }
         }
@@ -127,7 +106,7 @@ mod tests {
             parse("cmd+o"),
             Some(Shortcut {
                 modifiers: vec![Modifier::Meta],
-                key: Key::Unicode('o')
+                key: Key::Char('o')
             })
         );
     }
@@ -136,7 +115,7 @@ mod tests {
     fn 보조키를_여러_개_받는다() {
         let parsed = parse("cmd+shift+z").expect("해석되어야 한다");
         assert_eq!(parsed.modifiers, vec![Modifier::Meta, Modifier::Shift]);
-        assert_eq!(parsed.key, Key::Unicode('z'));
+        assert_eq!(parsed.key, Key::Char('z'));
     }
 
     #[test]

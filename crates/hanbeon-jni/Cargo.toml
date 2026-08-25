@@ -1,0 +1,16 @@
+[package]
+name = "hanbeon-jni"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "코어를 안드로이드에서 부를 수 있게 하는 다리"
+
+[lib]
+name = "hanbeon_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+hanbeon-core = { version = "0.1.0", path = "../hanbeon-core" }
+jni = "0.21"
+serde_json = "1.0.151"

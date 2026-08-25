@@ -4,9 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use hanbeon_core::profile::Profile;
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
-
-use crate::profile::Profile;
 
 /// 화면 가장자리에서 띄울 여백(논리 px).
 const EDGE_MARGIN: f64 = 24.0;
@@ -230,7 +229,12 @@ impl MoveWatch {
                 let moved = match profile.lock() {
                     Ok(mut profile) if profile.window_position != Some(position) => {
                         profile.window_position = Some(position);
-                        if let Err(message) = profile.save(&app) {
+                        if let Err(message) = app
+                            .path()
+                            .app_config_dir()
+                            .map_err(|error| error.to_string())
+                            .and_then(|dir| profile.save(&dir))
+                        {
                             eprintln!("창 위치를 저장하지 못했습니다. {message}");
                         }
                         true

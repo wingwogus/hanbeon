@@ -4,10 +4,10 @@
 //! 그래서 이 모듈이 성립하려면 floating 창이 포커스를 뺏지 않아야 한다(`window` 참조).
 
 use enigo::{Direction, Enigo, InputError, Key, Keyboard, Settings};
-
-use crate::action::Action;
-use crate::profile::UndoMapping;
-use crate::shortcut::Shortcut;
+use hanbeon_core::action::Action;
+use hanbeon_core::key::{Key as CoreKey, Modifier};
+use hanbeon_core::profile::UndoMapping;
+use hanbeon_core::shortcut::Shortcut;
 
 /// 주입 실패 원인. 사용자에게 그대로 보여줄 수 있는 문구를 담는다.
 #[derive(Debug)]
@@ -15,16 +15,6 @@ pub struct EmitError {
     pub message: String,
     /// 권한 문제로 보이는 경우. 화면에서 해결 방법을 함께 안내한다.
     pub needs_permission: bool,
-}
-
-impl EmitError {
-    /// 키 주입이 아닌 경로(설정 창 열기 등)의 실패를 같은 통로로 흘린다.
-    pub fn from_message(message: String) -> Self {
-        Self {
-            message,
-            needs_permission: false,
-        }
-    }
 }
 
 impl std::fmt::Display for EmitError {
@@ -54,16 +44,49 @@ fn injected(result: Result<(), InputError>) -> Result<(), EmitError> {
 /// 중간에 실패해도 놓는 것은 건너뛰지 않는다. 보조키가 눌린 채로 남으면
 /// 그 뒤의 모든 입력이 조합키가 되어, 사용자는 무엇을 눌러도 엉뚱한 일이
 /// 일어나는 상태에 갇힌다.
+fn modifier_key(modifier: Modifier) -> Key {
+    match modifier {
+        Modifier::Meta => Key::Meta,
+        Modifier::Control => Key::Control,
+        Modifier::Alt => Key::Alt,
+        Modifier::Shift => Key::Shift,
+    }
+}
+
+fn shortcut_key(key: CoreKey) -> Key {
+    match key {
+        CoreKey::PageDown => Key::PageDown,
+        CoreKey::PageUp => Key::PageUp,
+        CoreKey::Home => Key::Home,
+        CoreKey::End => Key::End,
+        CoreKey::Up => Key::UpArrow,
+        CoreKey::Down => Key::DownArrow,
+        CoreKey::Left => Key::LeftArrow,
+        CoreKey::Right => Key::RightArrow,
+        CoreKey::Space => Key::Space,
+        CoreKey::Enter => Key::Return,
+        CoreKey::Tab => Key::Tab,
+        CoreKey::Escape => Key::Escape,
+        CoreKey::MediaPlayPause => Key::MediaPlayPause,
+        CoreKey::MediaNextTrack => Key::MediaNextTrack,
+        CoreKey::MediaPrevTrack => Key::MediaPrevTrack,
+        CoreKey::VolumeUp => Key::VolumeUp,
+        CoreKey::VolumeDown => Key::VolumeDown,
+        CoreKey::VolumeMute => Key::VolumeMute,
+        CoreKey::Char(character) => Key::Unicode(character),
+    }
+}
+
 fn send_shortcut(enigo: &mut Enigo, shortcut: &Shortcut) -> Result<(), InputError> {
     let mut result = Ok(());
 
     for modifier in &shortcut.modifiers {
-        result = result.and_then(|_| enigo.key(modifier.key(), Direction::Press));
+        result = result.and_then(|_| enigo.key(modifier_key(*modifier), Direction::Press));
     }
-    result = result.and_then(|_| enigo.key(shortcut.key, Direction::Click));
+    result = result.and_then(|_| enigo.key(shortcut_key(shortcut.key), Direction::Click));
 
     for modifier in shortcut.modifiers.iter().rev() {
-        let released = enigo.key(modifier.key(), Direction::Release);
+        let released = enigo.key(modifier_key(*modifier), Direction::Release);
         if result.is_ok() {
             result = released;
         }

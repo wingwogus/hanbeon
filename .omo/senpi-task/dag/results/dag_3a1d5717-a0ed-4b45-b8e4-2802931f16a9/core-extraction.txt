@@ -1,0 +1,41 @@
+I read this as a full desktop-to-core extraction - completed the refactor and verified the workspace.
+
+Implemented:
+
+- Desktop now uses `hanbeon-core` for:
+  - Scan state machine
+  - Adaptive timing
+  - Actions and scan cells
+  - Gesture detection
+  - Profiles
+  - Journaling
+  - Shortcut parsing and portable key types
+- Added a desktop `Host` implementation handling only:
+  - Tauri event publication
+  - Enigo key injection
+  - Settings-window operations
+  - Audio and Arduino LED feedback
+  - Profile-path persistence
+- Preserved dynamic Hana Cloud registry behavior through a core `Scanner::apply_cells` boundary, including:
+  - SHA/version-sensitive preset replacement
+  - First-recognition messaging
+  - Dynamic window resizing
+- Removed duplicated desktop implementations:
+  - `action.rs`
+  - `adapt.rs`
+  - `journal.rs`
+  - `profile.rs`
+  - `shortcut.rs`
+- Reduced desktop `scan.rs` from the inline state machine to a thin platform adapter.
+- Kept `input.rs` as global-shortcut/Tauri glue while using the core gesture detector.
+- Did not modify frontend source or `apps/desktop/gen/`.
+
+Verification passed:
+
+- `cargo test --workspace` — all tests passed
+- `cargo clippy --workspace -- -D warnings` — passed
+- `bun run lint` — passed
+- `grep -rn "use tauri" crates/hanbeon-core/src/` — no matches
+- `git diff --check` — passed
+
+The only emitted Rust notice is the existing future-incompatibility warning from dependency `block v0.1.6`; it is not a clippy warning or caused by this refactor.

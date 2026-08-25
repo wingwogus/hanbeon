@@ -1,0 +1,13 @@
+I read this as an implementation task - Android initialization and gate evidence are complete; the required scaffold commit is blocked by existing repository checks.
+
+- `cargo tauri android init` succeeded using NDK `26.3.11579264`.
+  - Generated scaffold: `apps/desktop/src-tauri/gen/android/` (45 files staged).
+- Android debug build exited `1` before Gradle/Rust/APK packaging:
+  - Tauri's `beforeBuildCommand` ran `bun run build`.
+  - `next build` failed with: `Cannot read properties of undefined (reading 'getCurrentDirectory')`.
+  - No APK was produced.
+- Evidence written and heading-validated:
+  - `.omo/evidence/android-spike-gate.md`
+  - Decision: **T** (Tauri-plugin path); the failure is front-end prebuild-only, not structural Android/Tauri blockage.
+- The requested scaffold commit was attempted with message `chore(android): tauri android project scaffold`, but the repository pre-commit hook failed on existing Rust type errors in `apps/desktop/src-tauri` caused by mismatches with `hanbeon-core`. I did not bypass the hook or modify out-of-scope Rust code.
+- Generated scaffold files remain staged; the evidence file remains untracked.

@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use hanbeon_core::scan::{Mode, Snapshot};
+
 use crate::arduino::{self, OutputCommand};
-use crate::scan::{Mode, Snapshot};
 
 #[derive(Clone)]
 pub struct LedBridge {
@@ -30,10 +31,6 @@ impl LedBridge {
 
     pub fn sync(&self, snapshot: &Snapshot) {
         (self.enqueue)(command_for(snapshot));
-    }
-
-    pub fn for_worker(&self) -> Self {
-        self.clone()
     }
 }
 

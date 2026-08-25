@@ -1,0 +1,17 @@
+[package]
+name = "hanbeon-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "'한번'의 플랫폼에 매이지 않는 부분 — 스캔 상태기계, 간격 적응, 프로필, 기록"
+
+[lib]
+name = "hanbeon_core"
+# 안드로이드에서 JNI로 부르려면 동적 라이브러리가 필요하다.
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }

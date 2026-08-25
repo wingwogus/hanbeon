@@ -798,9 +798,9 @@ mod tests {
 
     #[test]
     fn serial_press_release_delivers_one_short_judgement() {
-        let detector = std::sync::Arc::new(Mutex::new(crate::input::GestureDetector::new(
-            Duration::from_millis(600),
-        )));
+        let detector = std::sync::Arc::new(Mutex::new(
+            hanbeon_core::gesture::GestureDetector::new(Duration::from_millis(600)),
+        ));
         let started = Instant::now();
         let mut parser = RecordParser::default();
         let mut state = PressState::default();
@@ -826,9 +826,9 @@ mod tests {
 
     #[test]
     fn duplicate_press_and_disconnect_do_not_leave_detector_pressed() {
-        let detector = std::sync::Arc::new(Mutex::new(crate::input::GestureDetector::new(
-            Duration::from_millis(600),
-        )));
+        let detector = std::sync::Arc::new(Mutex::new(
+            hanbeon_core::gesture::GestureDetector::new(Duration::from_millis(600)),
+        ));
         let started = Instant::now();
         let mut state = PressState::default();
         let mut handled = Vec::new();

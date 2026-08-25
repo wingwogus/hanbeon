@@ -12,36 +12,9 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
+use hanbeon_core::cue::Cue;
 use rodio::Source;
 use rodio::source::SineWave;
-
-/// 서로 구분되어야 하는 신호음.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cue {
-    /// 커서가 한 칸 이동했다.
-    Tick,
-    /// 동작을 실행했다.
-    Select,
-    /// 되돌리기 창에 들어갔거나 되돌렸다.
-    Undo,
-    /// 정지했다.
-    Pause,
-}
-
-impl Cue {
-    /// (주파수, 길이, 음량).
-    ///
-    /// 커서 이동은 초당 한 번꼴로 계속 나므로 짧고 작게 낸다. 되돌리기와 정지는
-    /// 사용자가 반드시 알아차려야 하는 상태 변화라 낮고 길게 내 구분한다.
-    fn tone(self) -> (f32, u64, f32) {
-        match self {
-            Cue::Tick => (660.0, 30, 0.06),
-            Cue::Select => (940.0, 70, 0.12),
-            Cue::Undo => (520.0, 150, 0.12),
-            Cue::Pause => (330.0, 180, 0.10),
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct Audio {

@@ -1,0 +1,5 @@
+I read this as a final audit task - I reviewed both evidence files, captured Git status/history, and wrote `.omo/evidence/final-audit.md`.
+
+The audit includes all four required sections, references both input evidence files by name, and concludes:
+
+**NEEDS-MORE-WORK** — the Next.js build-worker error must be fixed and the Android APK must be built and installed on an aarch64 emulator or device.

@@ -28,3 +28,6 @@ test.db
 .sisyphus
 docs/superpowers/
 tsconfig.tsbuildinfo
+
+# Android NDK linker config (machine-local, do not commit)
+.cargo/config.toml

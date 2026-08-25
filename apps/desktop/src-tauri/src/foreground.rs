@@ -14,8 +14,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::app_registry::Registry;
 use crate::focused_application::{self, FocusedApplication};
 use crate::occlusion::{self, MARGIN};
-use crate::profile::Profile;
-use crate::scan::Scanner;
+use hanbeon_core::profile::Profile;
+use hanbeon_core::scan::Scanner;
 
 /// 가림 여부가 바뀔 때만 프론트로 보낸다.
 pub const EVENT_COVER: &str = "window://cover";
@@ -56,7 +56,23 @@ pub fn watch(app: AppHandle, profile: Arc<Mutex<Profile>>, scanner: Scanner, reg
             let ours = is_ours(front.as_ref(), std::process::id() as i32);
 
             if !ours {
-                scanner.apply_preset(&app, front.as_ref(), &registry);
+                let enabled = profile
+                    .lock()
+                    .map(|profile| profile.app_buttons)
+                    .unwrap_or(false);
+                let preset = if enabled {
+                    front
+                        .as_ref()
+                        .and_then(|focused| registry.lookup(focused))
+                        .and_then(crate::preset::PresetSelection::from_registry)
+                } else {
+                    None
+                };
+                let key = preset.as_ref().map(|preset| preset.key.clone());
+                let registry_id = preset.as_ref().map(|preset| preset.registry_id.clone());
+                let name = preset.as_ref().map(|preset| preset.name.clone());
+                let cells = crate::preset::cells_for(preset.as_ref());
+                scanner.apply_cells(key, registry_id, name, cells);
             }
 
             let (dim, percent) = profile

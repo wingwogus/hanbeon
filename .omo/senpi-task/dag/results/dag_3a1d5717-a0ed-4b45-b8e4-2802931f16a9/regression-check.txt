@@ -1,0 +1,11 @@
+I read this as verification-only - the regression evidence has been written without modifying source files.
+
+Created `.omo/evidence/regression-gate.md` with all five command results:
+
+- `cargo test --workspace`: PASS, exit `0`
+- `cargo clippy --workspace -- -D warnings`: PASS, exit `0`
+- `bun run typecheck`: PASS, exit `0`
+- `bun run test --bail 1`: FAIL, exit `1` (filter `1` matched no test files)
+- `cargo build -p hanbeon`: PASS, exit `0`
+
+Overall verdict: **GATE: FAIL**

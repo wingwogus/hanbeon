@@ -345,7 +345,7 @@ fn validate_profile(profile: &AppProfile, expected_id: &str) -> Result<(), Strin
                 || !shortcut
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'+')
-                || crate::shortcut::parse(shortcut).is_none()
+                || hanbeon_core::shortcut::parse(shortcut).is_none()
             {
                 return Err(format!("지원하지 않는 shortcut입니다. ({shortcut})"));
             }

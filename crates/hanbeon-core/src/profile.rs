@@ -5,10 +5,9 @@
 //! 마지막 저장 설정으로 복구된다(PRD F9).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 
 /// 되돌리기를 어떤 키로 보낼지.
 ///
@@ -119,22 +118,17 @@ impl Profile {
         self.adaptive && !self.manual_lock
     }
 
-    fn path(app: &AppHandle) -> Result<PathBuf, String> {
-        let dir = app
-            .path()
-            .app_config_dir()
-            .map_err(|e| format!("설정 폴더를 찾지 못했습니다. ({e})"))?;
-        Ok(dir.join("profile.json"))
+    fn path(dir: &Path) -> PathBuf {
+        dir.join("profile.json")
     }
 
     /// 저장된 프로필을 읽는다.
     ///
     /// 파일이 없거나 깨졌으면 기본값으로 시작한다. 설정을 읽지 못했다고 해서
     /// 앱이 뜨지 않으면 사용자는 스위치 외의 입력 수단이 없어 아무것도 못 한다.
-    pub fn load(app: &AppHandle) -> Self {
-        let mut profile = Self::path(app)
+    pub fn load(dir: &Path) -> Self {
+        let mut profile = fs::read_to_string(Self::path(dir))
             .ok()
-            .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|raw| match serde_json::from_str::<Profile>(&raw) {
                 Ok(profile) => Some(profile),
                 Err(error) => {
@@ -148,8 +142,8 @@ impl Profile {
         profile
     }
 
-    pub fn save(&self, app: &AppHandle) -> Result<(), String> {
-        let path = Self::path(app)?;
+    pub fn save(&self, dir: &Path) -> Result<(), String> {
+        let path = Self::path(dir);
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("설정 폴더를 만들지 못했습니다. ({e})"))?;
         }

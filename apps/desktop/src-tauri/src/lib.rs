@@ -5,35 +5,46 @@
 //! 스위치 입력 판정(짧게/길게)은 대상 앱으로 키를 보내는 지점과 같은 쪽에
 //! 있어야 지연을 예측할 수 있기 때문이다.
 
-mod action;
-mod adapt;
 mod app_registry;
+#[cfg(feature = "desktop")]
 pub mod arduino;
+#[cfg(feature = "desktop")]
 mod audio;
+#[cfg(feature = "desktop")]
 mod emit;
 pub mod focused_application;
 mod foreground;
+#[cfg(feature = "desktop")]
 mod input;
-mod journal;
+#[cfg(feature = "desktop")]
 mod led;
 mod occlusion;
 mod preset;
-mod profile;
 mod scan;
-mod shortcut;
+#[cfg(feature = "desktop")]
 mod tray;
 mod window;
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "desktop")]
+use std::time::Instant;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(feature = "desktop")]
+use tauri::Emitter;
+#[allow(unused_imports)]
+use tauri::{AppHandle, Manager, State};
 
+#[cfg(feature = "desktop")]
 use audio::Audio;
-use input::{GestureDetector, SharedDetector};
-use profile::Profile;
-use scan::{Scanner, Snapshot};
+use hanbeon_core::gesture::SharedDetector;
+use hanbeon_core::host::Host;
+use hanbeon_core::journal::{Event, Journal};
+use hanbeon_core::profile::Profile;
+use hanbeon_core::scan::{Scanner, Snapshot};
+#[cfg(feature = "desktop")]
+use scan::DesktopHost;
 
 /// 코어가 들고 있는 현재 프로필. 설정 화면과 적응 로직이 함께 쓴다.
 struct SharedProfile(Arc<Mutex<Profile>>);
@@ -77,6 +88,7 @@ fn save_profile(
 ) -> Result<SaveResult, String> {
     next.sanitize();
 
+    #[cfg(feature = "desktop")]
     let previous_key = shared
         .0
         .lock()
@@ -84,7 +96,9 @@ fn save_profile(
         .map_err(|_| "설정을 읽지 못했습니다.".to_string())?;
 
     // 스위치 키가 바뀌면 먼저 붙여본다. 실패하면 키만 되돌리고 나머지는 살린다.
+    #[cfg(feature = "desktop")]
     let mut warning = None;
+    #[cfg(feature = "desktop")]
     if next.switch_key != previous_key {
         let old = input::configured_code(&previous_key);
         let new = input::configured_code(&next.switch_key);
@@ -94,7 +108,11 @@ fn save_profile(
         }
     }
 
-    next.save(&app)?;
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("설정 폴더를 찾지 못했습니다. ({error})"))?;
+    next.save(&config_dir)?;
 
     if let Ok(mut profile) = shared.0.lock() {
         *profile = next.clone();
@@ -104,19 +122,27 @@ fn save_profile(
         detector.set_long_press(Duration::from_millis(next.long_press_ms));
     }
 
-    Ok(SaveResult {
+    #[cfg(feature = "desktop")]
+    let result = Ok(SaveResult {
         profile: next,
         warning,
-    })
+    });
+    #[cfg(not(feature = "desktop"))]
+    let result = Ok(SaveResult {
+        profile: next,
+        warning: None,
+    });
+    result
 }
 
 /// 기록이 어디에 쌓이는지 사용자가 볼 수 있어야 한다. 어디 있는지 모르는
 /// 기록은 지울 수도, 실증 담당자에게 건넬 수도 없다.
 #[tauri::command]
 fn log_directory(app: AppHandle) -> Result<String, String> {
-    journal::directory(&app)
+    app.path()
+        .app_log_dir()
         .map(|path| path.display().to_string())
-        .ok_or_else(|| "기록 폴더를 찾지 못했습니다.".to_string())
+        .map_err(|_| "기록 폴더를 찾지 못했습니다.".to_string())
 }
 
 #[tauri::command]
@@ -137,9 +163,11 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            #[cfg(feature = "desktop")]
             tray::setup(app)?;
 
-            let mut profile = Profile::load(app.handle());
+            let config_dir = app.path().app_config_dir()?;
+            let mut profile = Profile::load(&config_dir);
             // 검증용 통로. 저장된 설정을 건드리지 않고 시작 간격만 바꿔 끼운다.
             if let Some(interval_ms) = scan::interval_override() {
                 profile.interval_ms = interval_ms;
@@ -167,28 +195,46 @@ pub fn run() {
                 );
             }
 
-            let audio = Audio::spawn();
-            audio.set_enabled(profile.sound);
+            #[cfg(feature = "desktop")]
+            let audio = {
+                let a = Audio::spawn();
+                a.set_enabled(profile.sound);
+                a
+            };
 
             // 실증 지표는 실측으로만 주장할 수 있고, 그러려면 무엇이 언제
             // 일어났는지가 파일로 남아야 한다(PRD 10절).
             let journal = if profile.logging {
-                journal::Journal::open(app.handle())
+                Journal::open(&app.path().app_log_dir()?)
             } else {
-                journal::Journal::off()
+                Journal::off()
             };
-            journal.record(journal::Event::Session {
+            journal.record(Event::Session {
                 phase: "start",
                 version: app.package_info().version.to_string(),
             });
 
+            #[cfg(feature = "desktop")]
             let switch_code = input::configured_code(&profile.switch_key);
-            let detector: SharedDetector = Arc::new(Mutex::new(GestureDetector::new(
-                Duration::from_millis(profile.long_press_ms),
-            )));
+            let detector: SharedDetector = Arc::new(Mutex::new(
+                hanbeon_core::gesture::GestureDetector::new(Duration::from_millis(
+                    profile.long_press_ms,
+                )),
+            ));
 
             let profile = Arc::new(Mutex::new(profile));
-            let scanner = Scanner::new(Arc::clone(&profile), audio, journal.clone());
+            #[cfg(feature = "desktop")]
+            let host = Arc::new(DesktopHost::new(
+                app.handle().clone(),
+                audio,
+                config_dir,
+            ));
+            // 안드로이드는 접근성 서비스 플러그인이 Host를 구현한다. 그때까지
+            // 커맨드 경로가 컴파일되도록 하는 자리표시자.
+            #[cfg(not(feature = "desktop"))]
+            let host: Arc<dyn Host> = Arc::new(hanbeon_core::host::NoopHost);
+
+            let scanner = Scanner::new(Arc::clone(&profile), host.clone() as Arc<dyn Host>, journal.clone());
             let registry = app_registry::Registry::spawn(
                 app.path().app_cache_dir()?.join("hana-cloud"),
             );
@@ -207,8 +253,14 @@ pub fn run() {
                 scanner.clone(),
                 registry,
             );
-            scanner.start(app.handle().clone());
+            #[cfg(feature = "desktop")]
+            if let Some(snapshot) = scanner.snapshot() {
+                host.sync_led(&snapshot);
+            }
+            scanner.start();
 
+#[cfg(feature = "desktop")]
+        {
             // Native serial starts at app launch. P/R edges share GestureDetector
             // with the HID/F13 fallback below; Accessibility is used only later
             // when Scanner::handle injects into another app.
@@ -233,7 +285,7 @@ pub fn run() {
                         Instant::now(),
                         |judgement| {
                             input::announce(&native_app, judgement);
-                            native_scanner.handle(&native_app, judgement);
+                            native_scanner.handle(judgement);
                         },
                     );
                 },
@@ -244,11 +296,11 @@ pub fn run() {
                 app.handle(),
                 detector,
                 switch_code,
-                move |app, judgement| {
-                    scanner.handle(app, judgement);
+                move |_app, judgement| {
+                    scanner.handle(judgement);
                 },
             );
-            journal.record(journal::Event::Switch {
+            journal.record(Event::Switch {
                 state: if registered.is_ok() {
                     "registered"
                 } else {
@@ -259,6 +311,7 @@ pub fn run() {
             registered?;
 
             app.manage(journal);
+        }
 
             Ok(())
         })
@@ -297,9 +350,9 @@ pub fn run() {
         // 적응으로 조정된 간격은 메모리에만 있다. 종료할 때 한 번 적어 두어야
         // 다음에 켰을 때 사용자가 익숙해진 속도로 시작한다.
         if let tauri::RunEvent::Exit = event
-            && let Some(journal) = app.try_state::<journal::Journal>()
+            && let Some(journal) = app.try_state::<Journal>()
         {
-            journal.record(journal::Event::Session {
+            journal.record(Event::Session {
                 phase: "stop",
                 version: app.package_info().version.to_string(),
             });
@@ -308,7 +361,8 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event
             && let Some(shared) = app.try_state::<SharedProfile>()
             && let Ok(profile) = shared.0.lock()
-            && let Err(message) = profile.save(app)
+            && let Ok(config_dir) = app.path().app_config_dir()
+            && let Err(message) = profile.save(&config_dir)
         {
             eprintln!("종료하며 설정을 저장하지 못했습니다. {message}");
         }

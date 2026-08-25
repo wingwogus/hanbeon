@@ -13,14 +13,13 @@
     "react": "^19.2",
     "next": "^16.3",
     "@devup-ui/react": "^1",
-    "@devup-ui/reset-css": "^1"
+    "@devup-ui/reset-css": "1.0.24"
   },
   "devDependencies": {
-    "@devup-ui/next-plugin": "^1",
+    "@devup-ui/next-plugin": "1.0.80",
     "@types/node": "^26",
     "@types/react": "^19",
-    "@typescript/native": "npm:typescript@^7.0.2",
     "babel-plugin-react-compiler": "^1.0.0",
-    "typescript": "npm:@typescript/typescript6@^6.0.2"
+    "typescript": "6.0.3"
   }
 }

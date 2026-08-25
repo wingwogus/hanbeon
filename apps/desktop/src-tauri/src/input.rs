@@ -3,11 +3,13 @@
 //! 스위치는 USB/BT HID 키보드로 인식되고 눌린 동안 지정 키를 유지한다고 가정한다
 //! (docs/PRD.md 7절). 전역 단축키로 그 키를 잡으면 대상 앱으로 새어 나가지도 않는다.
 
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+#[allow(unused_imports)] // integration tests include this adapter module directly.
+pub use hanbeon_core::gesture::{Gesture, GestureDetector, Judgement, SharedDetector};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+#[cfg(feature = "desktop")]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// 스위치를 누를 때마다 판정 결과를 알린다. 설정 화면이 구독한다.
@@ -21,97 +23,10 @@ struct GesturePayload {
 }
 
 /// 스위치가 보내는 기본 키. 일반 사용에서 충돌이 가장 적다.
+#[cfg(feature = "desktop")]
 pub const DEFAULT_SWITCH_CODE: Code = Code::F13;
 
-/// 이 시간 이상 눌려 있으면 길게 누름으로 본다. 설정에서 300~1500ms로 조정한다.
-pub const DEFAULT_LONG_PRESS_MS: u64 = 600;
-
-/// 접점 떨림 필터. 뗀 직후 이 시간 안의 누름은 같은 입력으로 본다.
-const DEBOUNCE_MS: u64 = 50;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Gesture {
-    /// 짧게 누름 — 현재 칸 실행
-    Short,
-    /// 길게 누름 — 취소 / 일시정지
-    Long,
-}
-
-/// 판정 결과와 근거.
-///
-/// 설정 화면의 스위치 테스트는 '얼마나 눌렀고 그래서 무엇으로 읽혔는지'를
-/// 보여줘야 한다. 임계값을 조정하려면 사용자가 자기 입력을 볼 수 있어야 한다.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Judgement {
-    pub gesture: Gesture,
-    pub held: Duration,
-}
-
-/// 눌림·뗌 시각만으로 제스처를 판정한다.
-///
-/// 시각을 인자로 받아 시계에 의존하지 않는다. 판정 규칙은 피로에 따라 조정될
-/// 값이라 단위 테스트로 고정해 둘 필요가 있다.
-pub struct GestureDetector {
-    pressed_at: Option<Instant>,
-    released_at: Option<Instant>,
-    long_press: Duration,
-}
-
-impl GestureDetector {
-    pub fn new(long_press: Duration) -> Self {
-        Self {
-            pressed_at: None,
-            released_at: None,
-            long_press,
-        }
-    }
-
-    /// 설정 화면에서 임계값을 바꿀 때 쓴다(M3).
-    #[allow(dead_code)]
-    pub fn set_long_press(&mut self, long_press: Duration) {
-        self.long_press = long_press;
-    }
-
-    pub fn on_press(&mut self, now: Instant) {
-        // 키 리피트로 눌림이 반복 전달돼도 최초 시각을 유지한다.
-        if self.pressed_at.is_some() {
-            return;
-        }
-        // 접점 떨림으로 들어온 재입력은 무시한다.
-        if let Some(released) = self.released_at
-            && now.duration_since(released) < Duration::from_millis(DEBOUNCE_MS)
-        {
-            return;
-        }
-        self.pressed_at = Some(now);
-    }
-
-    pub fn on_release(&mut self, now: Instant) -> Option<Judgement> {
-        let pressed_at = self.pressed_at.take()?;
-        self.released_at = Some(now);
-
-        let held = now.duration_since(pressed_at);
-        Some(Judgement {
-            gesture: if held >= self.long_press {
-                Gesture::Long
-            } else {
-                Gesture::Short
-            },
-            held,
-        })
-    }
-}
-
-impl Default for GestureDetector {
-    fn default() -> Self {
-        Self::new(Duration::from_millis(DEFAULT_LONG_PRESS_MS))
-    }
-}
-
-/// 여러 곳(설정 저장, 스위치 테스트)에서 임계값을 바꿔야 해서 공유한다.
-pub type SharedDetector = Arc<Mutex<GestureDetector>>;
-
+#[cfg(feature = "desktop")]
 pub fn parse_code(name: &str) -> Option<Code> {
     name.parse::<Code>().ok()
 }
@@ -120,6 +35,7 @@ pub fn parse_code(name: &str) -> Option<Code> {
 ///
 /// 환경변수가 프로필을 이긴다. 실기 스위치 없이 검증할 때 저장된 설정을
 /// 건드리지 않고 키만 바꿔 끼울 수 있어야 하기 때문이다.
+#[cfg(feature = "desktop")]
 pub fn configured_code(profile_key: &str) -> Code {
     if let Ok(name) = std::env::var("HANBEON_SWITCH_KEY") {
         return parse_code(&name).unwrap_or_else(|| {
@@ -143,6 +59,7 @@ pub(crate) fn announce(app: &AppHandle, judgement: Judgement) {
 }
 
 /// 전역 단축키로 스위치 키를 잡고, 판정된 제스처를 콜백으로 넘긴다.
+#[cfg(feature = "desktop")]
 pub fn register<F>(
     app: &AppHandle,
     detector: SharedDetector,
@@ -190,6 +107,7 @@ where
 ///
 /// 새 키 등록에 실패하면 이전 키를 되살린다. 스위치가 아무 키에도 붙어 있지
 /// 않은 상태로 두면 사용자는 앱을 조작할 방법을 완전히 잃는다.
+#[cfg(feature = "desktop")]
 pub fn rebind(app: &AppHandle, old: Code, new: Code) -> Result<(), String> {
     if old == new {
         return Ok(());
@@ -211,6 +129,8 @@ pub fn rebind(app: &AppHandle, old: Code, new: Code) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hanbeon_core::gesture::GestureDetector;
+    use std::time::Duration;
 
     fn detector() -> GestureDetector {
         GestureDetector::new(Duration::from_millis(600))

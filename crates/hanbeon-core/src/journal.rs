@@ -14,14 +14,13 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use chrono::{DateTime, Local};
 use serde::Serialize;
 use serde_json::json;
-use tauri::{AppHandle, Manager};
 
 /// 한 줄에 하나씩 남기는 사건.
 ///
@@ -60,7 +59,14 @@ pub enum Event {
     Action {
         cell: String,
         action: String,
-        reaction_ms: u64,
+        /// 커서가 칸에 들어온 뒤 누르기까지. 순환 중에 고른 경우에만 값이 있다.
+        ///
+        /// 머무름 연타에는 '커서 진입'이 없어서 이 값이 정의되지 않는다(PRD F5).
+        /// 0을 적으면 반응이 즉각적이었던 것으로, 누적값을 적으면 한없이 느렸던
+        /// 것으로 읽힌다. 둘 다 사실이 아니므로 비운다.
+        reaction_ms: Option<u64>,
+        /// 누를 때의 모드. 순환 중 선택과 머무름 연타를 갈라 세기 위한 것이다.
+        mode: &'static str,
         steps: u32,
         /// 그때 순환에 있던 자리 수. `steps`가 이 값 이상이면 원하는 칸을
         /// 지나쳐 한 바퀴를 더 기다린 것이다. 자리 수는 앱에 따라 달라지므로
@@ -105,8 +111,8 @@ impl Journal {
     }
 
     /// 로그 폴더에 오늘 날짜 파일을 열고 쓰기 스레드를 띄운다.
-    pub fn open(app: &AppHandle) -> Self {
-        let Some(path) = today_path(app) else {
+    pub fn open(log_dir: &Path) -> Self {
+        let Some(path) = today_path(log_dir) else {
             eprintln!("기록 폴더를 찾지 못해 이벤트를 남기지 않습니다.");
             return Self::off();
         };
@@ -173,17 +179,11 @@ fn write_line(writer: &mut BufWriter<File>, event: &Event) -> std::io::Result<()
 }
 
 /// 오늘 날짜의 기록 파일 경로. 폴더가 없으면 만든다.
-fn today_path(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_log_dir().ok()?;
-    fs::create_dir_all(&dir).ok()?;
+fn today_path(dir: &Path) -> Option<PathBuf> {
+    fs::create_dir_all(dir).ok()?;
 
     let name = format!("events-{}.jsonl", Local::now().format("%Y-%m-%d"));
     Some(dir.join(name))
-}
-
-/// 사용자에게 보여줄 기록 폴더 위치.
-pub fn directory(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_log_dir().ok()
 }
 
 #[cfg(test)]
@@ -212,7 +212,8 @@ mod tests {
         let value = line_of(Event::Action {
             cell: ">".into(),
             action: "next".into(),
-            reaction_ms: 420,
+            reaction_ms: Some(420),
+            mode: "scanning",
             steps: 2,
             cycle: 5,
             ok: true,
@@ -220,9 +221,30 @@ mod tests {
         });
 
         assert_eq!(value["reactionMs"], 420);
+        assert_eq!(value["mode"], "scanning");
         assert_eq!(value["steps"], 2);
         assert_eq!(value["cycle"], 5);
         assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn 머무름_연타는_반응시간을_비운다() {
+        // 0으로 적으면 즉각 반응한 것으로, 누적값을 적으면 한없이 느렸던 것으로
+        // 읽힌다. 둘 다 사실이 아니라서 비운다. 읽는 쪽이 이 줄을 반응시간
+        // 표본에서 빼야 한다.
+        let value = line_of(Event::Action {
+            cell: ">".into(),
+            action: "next".into(),
+            reaction_ms: None,
+            mode: "dwelling",
+            steps: 0,
+            cycle: 5,
+            ok: true,
+            error: None,
+        });
+
+        assert!(value["reactionMs"].is_null());
+        assert_eq!(value["mode"], "dwelling");
     }
 
     #[test]
