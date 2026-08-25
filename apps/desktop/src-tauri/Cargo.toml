@@ -52,3 +52,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 x11rb = "0.14.0"
 # floating 창이 대상 앱의 포커스를 뺏지 않도록 NSPanel(nonactivating)로 승격할 때 사용한다.
 #   cargo add objc2 objc2-app-kit
+
+# 통합 테스트는 데스크톱 기능(enigo·serialport)을 쓰는 모듈을 포함한다.
+[[test]]
+name = "arduino"
+required-features = ["desktop"]

@@ -27,11 +27,12 @@ mod window;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-#[cfg(feature = "desktop")]
+#[cfg_attr(not(feature = "desktop"), allow(unused_imports))]
 use std::time::Instant;
 
 use serde::Serialize;
 #[cfg(feature = "desktop")]
+#[cfg_attr(not(feature = "desktop"), allow(unused_imports))]
 use tauri::Emitter;
 #[allow(unused_imports)]
 use tauri::{AppHandle, Manager, State};
@@ -155,6 +156,8 @@ fn close_settings(app: AppHandle) -> Result<(), String> {
     window::hide_settings(&app)
 }
 
+// 안드로이드에서는 JVM이 System.loadLibrary 후 이 함수를 부른다.
+#[cfg_attr(target_os = "android", tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
