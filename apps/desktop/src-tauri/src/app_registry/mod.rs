@@ -16,8 +16,10 @@ use self::http::{HttpClient, IndexFetch, Validators};
 pub(crate) use self::model::ResolvedAction;
 use self::model::{AppEntry, AppProfile, Platform, RegistryIndex, matches_application};
 
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 const REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 const COMMAND_CAPACITY: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,12 +48,27 @@ struct StoredProfile {
     profile: AppProfile,
 }
 
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 #[derive(Clone, Debug)]
 enum Command {
     FetchProfile(AppEntry),
 }
 
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 impl Registry {
+    /// 안드로이드용: 네트워크 스레드 없이 항상 빈 인덱스를 돌려주는 핸들.
+    /// rustls-platform-verifier의 JNI 초기화가 없는 환경에서 reqwest가
+    /// 패닉하므로 당분간 프리셋 동기화는 데스크톱 전용이다.
+    pub(crate) fn noop(_cache_dir: std::path::PathBuf) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RegistryState::default())),
+            sender: {
+                let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+                tx
+            },
+        }
+    }
+
     pub(crate) fn spawn(cache_root: PathBuf) -> Self {
         let cache = Cache::new(cache_root);
         let cached = match cache.load_latest_index() {

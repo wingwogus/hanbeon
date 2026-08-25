@@ -180,6 +180,9 @@ pub fn run() {
 
             // 창 배치는 프로필을 읽은 다음이어야 한다. 사용자가 옮겨 둔 위치를
             // 모른 채 먼저 띄우면 기본 위치에서 한 번 튄 뒤에 제자리를 찾는다.
+            // 안드로이드는 floating 창 배치·non-activating 개념이 없고, 웹뷰가
+            // 아직 준비 전일 때 eval하면 "failed to send message"로 죽는다.
+            #[cfg(feature = "desktop")]
             if let Some(floating) = app.get_webview_window("floating") {
                 window::prepare_floating(&floating, profile.window_position)?;
             }
@@ -238,9 +241,14 @@ pub fn run() {
             let host: Arc<dyn Host> = Arc::new(hanbeon_core::host::NoopHost);
 
             let scanner = Scanner::new(Arc::clone(&profile), host.clone() as Arc<dyn Host>, journal.clone());
+            // 안드로이드는 rustls-platform-verifier의 JNI 초기화가 없어 reqwest
+            // 클라이언트가 패닉한다. 하늘구름 프리셋은 데스크톱에서만 당분간.
+            #[cfg(feature = "desktop")]
             let registry = app_registry::Registry::spawn(
                 app.path().app_cache_dir()?.join("hana-cloud"),
             );
+            #[cfg(not(feature = "desktop"))]
+            let registry = app_registry::Registry::noop(app.path().app_cache_dir()?);
             let moves = window::MoveWatch::default();
 
             app.manage(SharedProfile(Arc::clone(&profile)));
