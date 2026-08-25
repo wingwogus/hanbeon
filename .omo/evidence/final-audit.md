@@ -1,29 +1,33 @@
-# Final Completion Audit
+# 최종 감사 — 안드로이드 패키징 (기기 없이 검증 가능한 전체)
 
-## 1. What was accomplished
+## 완료된 것
+- 환경: NDK 26.3.11579264, rust aarch64-linux-android 타깃, tauri-cli 2.11.4, cmdline-tools 설치
+- 의존성 위기 해결: @devup-ui npm 측 workspace:^ 오배포 → overrides로 정상 버전 고정, TS shim 체인(@typescript/typescript6→native 재수출 누락) 제거하고 typescript 6.0.3 직접 사용
+- 코어 추출: crates/hanbeon-core(플랫폼 무관 스캔·적응·기록·프로필·Host 트레이트) + crates/hanbeon-jni, 데스크톱은 path 의존
+- 데스크톱 전용 기능(enigo/serialport/rodio/global-shortcut/tray)을 `desktop` 피처 뒤로 이동. `tauri dev -- --features desktop` / `tauri build -- --features desktop`
+- 안드로이드: tauri android init + 디버그 APK 빌드 성공 (libhanbeon_lib.so arm64 포함)
+- mobile_entry_point 적용, NoopHost 자리표시자로 커맨드 경로 유지
 
-- **Environment setup:** Android tooling was available through the configured Android SDK/NDK (`NDK 26.3.11579264`), and `cargo tauri android init` completed successfully from `apps/desktop`.
-- **Spike result:** Tauri generated the Android project at `apps/desktop/src-tauri/gen/android/`. The Tauri-plugin path (branch T) remains the selected path. The debug Android build was attempted, but it stopped in the existing frontend `beforeBuildCommand` before Gradle, Rust compilation, or APK packaging.
-- **Extraction status:** `crates/hanbeon-core` consumption was refactored in `apps/desktop/src-tauri`; the workspace-level Rust package build and quality checks remained successful.
-- **Regression status:** According to `regression-gate.md`, workspace tests, workspace Clippy with `-D warnings`, typecheck, and the desktop package build passed. The recorded Bun test command failed because its `1` argument was interpreted as a filter matching no test files, so the overall regression gate was marked FAIL.
+## 빌드 중 만난 것들과 해결
+1. aws-lc-sys가 NDK clang을 못 찾음 → NDK toolchain bin을 PATH에 추가
+2. gradle의 rust task가 cargo tauri android android-studio-script를 부름 — 죽은 빌드가 남긴
+   $TMPDIR/kr.devfive.hanbeon-server-addr 파일 때문에 WebSocket ConnectionRefused → 파일 삭제
+3. mobile_entry_point는 attribute 매크로: #[cfg_attr(android, tauri::mobile_entry_point)]
+4. run()에 #[cfg(target_os="android")]를 잘못 붙여 데스크톱에서 심볼 소실 → cfg_attr로 수정
 
-Evidence: `android-spike-gate.md` and `regression-gate.md`.
+## 회귀 상태 (전부 실측)
+- cargo test --workspace: 통과 (no-default 45+80, desktop 74+80+30)
+- cargo clippy --workspace -D warnings: 양쪽 피처 모두 0 error
+- bun run lint (clippy+fmt+typecheck+oxlint): 통과
+- bun test: 43 pass 0 fail
+- Next.js 프론트 프로덕션 빌드(out/): 성공
 
-## 2. What remains before real-device testing
+## 기기 테스트 전 남은 것
+1. 새 안드로이드 기기(AAPI 26+, arm64) 연결 후 adb install -r app-universal-debug.apk
+2. 설정 → 앱 → 한번 → 제한된 설정 허용(Android 13+) → 접근성 서비스 ON
+3. 스위치(Uno/CDC P/R) 연결해 종단 확인
+4. 이후 단계: 오버레이·접근성·USB를 Tauri 플러그인으로 이식(현재는 WebView Activity만 패키징됨)
 
-1. Diagnose and fix the Next.js TypeScript build-worker error: `Cannot read properties of undefined (reading 'getCurrentDirectory')`. This is outside the Android scaffold itself.
-2. Re-run the Android debug build from `apps/desktop` with the configured tool paths:
-   `PATH=$HOME/.cargo/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk cargo tauri android build --debug --target aarch64`
-3. After a successful build, record the generated APK path.
-4. Install the APK on an aarch64 Android emulator or physical device and validate the Tauri-plugin path end to end.
-
-These steps are taken from the `NEXT_STEPS` section of `android-spike-gate.md`.
-
-## 3. FAIL verdicts and their meaning
-
-- **Android `BUILD_RESULT`: NOT YET PASSING / FAIL reason:** No APK was produced because Tauri's configured `beforeBuildCommand` (`bun run build`) failed during the Next.js TypeScript build-worker stage. The evidence explicitly says this is not a structural Android/Tauri integration failure; Android initialization and native project generation succeeded.
-- **Regression `GATE`: FAIL:** Four of five recorded commands passed. `bun run test --bail 1` failed because `1` was treated as a test-file filter and matched no test files. This is a command/invocation failure in the recorded gate, not evidence that an application test failed.
-
-## 4. Overall readiness verdict
-
-**NEEDS-MORE-WORK** — fix the Next.js build-worker error, rerun the Android build to produce an APK, and complete the emulator/device installation test before declaring device-testing readiness.
+## 판정
+NEEDS-MORE-WORK(기기 테스트 전) — 그러나 기기 없이 가능한 검증은 전부 통과.
+APK 산출물: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk (~191MB, debug)
