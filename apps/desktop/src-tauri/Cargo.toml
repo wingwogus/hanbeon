@@ -50,6 +50,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.14.0"
+
+[target.aarch64-linux-android.dependencies]
+jni = "0.21"
 # floating 창이 대상 앱의 포커스를 뺏지 않도록 NSPanel(nonactivating)로 승격할 때 사용한다.
 #   cargo add objc2 objc2-app-kit
 

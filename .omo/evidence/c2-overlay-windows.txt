@@ -1,0 +1,11 @@
+  Window #7 Window{c9e0f1e u0 kr.devfive.hanbeon}:
+    mDisplayId=0 mSession=Session{1515191 32614:u0a10343} mClient=android.os.BinderProxy@5a0dfa0
+    mOwnerUid=10343 showForAllUsers=false package=kr.devfive.hanbeon appop=SYSTEM_ALERT_WINDOW
+    mAttrs={(12,12)(562xwrap) gr=BOTTOM END CENTER sim={adjust=pan} ty=APPLICATION_OVERLAY fmt=TRANSLUCENT
+      fl=1000208
+--
+  Window #8 Window{b3747d2 u0 kr.devfive.hanbeon}:
+    mDisplayId=0 mSession=Session{1515191 32614:u0a10343} mClient=android.os.BinderProxy@f72b434
+    mOwnerUid=10343 showForAllUsers=false package=kr.devfive.hanbeon appop=SYSTEM_ALERT_WINDOW
+    mAttrs={(0,0)(fillxfill) sim={adjust=pan} ty=APPLICATION_OVERLAY fmt=TRANSLUCENT alpha=0.8
+      fl=1000318

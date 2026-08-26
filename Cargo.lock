@@ -1518,6 +1518,7 @@ dependencies = [
  "core-foundation",
  "enigo",
  "hanbeon-core",
+ "jni 0.21.1",
  "objc2",
  "objc2-app-kit",
  "reqwest",

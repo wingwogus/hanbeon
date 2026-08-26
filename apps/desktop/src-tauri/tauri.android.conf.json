@@ -1,0 +1,12 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "floating",
+        "url": "index.html",
+        "width": 360,
+        "height": 280
+      }
+    ]
+  }
+}

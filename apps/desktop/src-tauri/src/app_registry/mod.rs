@@ -57,6 +57,7 @@ enum Command {
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 impl Registry {
     /// 안드로이드용: 네트워크 스레드 없이 항상 빈 인덱스를 돌려주는 핸들.
+    #[cfg_attr(feature = "desktop", allow(dead_code))]
     /// rustls-platform-verifier의 JNI 초기화가 없는 환경에서 reqwest가
     /// 패닉하므로 당분간 프리셋 동기화는 데스크톱 전용이다.
     pub(crate) fn noop(_cache_dir: std::path::PathBuf) -> Self {

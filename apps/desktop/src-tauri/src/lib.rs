@@ -5,6 +5,8 @@
 //! 스위치 입력 판정(짧게/길게)은 대상 앱으로 키를 보내는 지점과 같은 쪽에
 //! 있어야 지연을 예측할 수 있기 때문이다.
 
+#[cfg(target_os = "android")]
+mod android_bridge;
 mod app_registry;
 #[cfg(feature = "desktop")]
 pub mod arduino;
@@ -347,6 +349,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+        #[cfg(target_os = "android")]
+        android_bridge::start_overlay_service,
             scan_snapshot,
             get_profile,
             save_profile,

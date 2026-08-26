@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 use hanbeon_core::profile::Profile;
 #[cfg(feature = "desktop")]
 use tauri::LogicalSize;
-#[cfg(feature = "desktop")]
-use tauri::{PhysicalPosition, WebviewWindow};
 #[allow(unused_imports)]
 use tauri::{AppHandle, Manager};
+#[cfg(feature = "desktop")]
+use tauri::{PhysicalPosition, WebviewWindow};
 
 /// 화면 가장자리에서 띄울 여백(논리 px).
 #[cfg(feature = "desktop")]
