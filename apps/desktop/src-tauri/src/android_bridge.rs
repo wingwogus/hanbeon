@@ -24,6 +24,8 @@ pub fn start_overlay_service(_app: AppHandle) -> Result<(), String> {
 fn start_service_internal() -> Result<(), String> {
     use jni::objects::{JClass, JObject, JValue};
 
+    eprintln!("[bridge] start_overlay_service 호출됨");
+
     let context = tauri::tao::platform::android::prelude::main_android_context()
         .ok_or_else(|| "Android 컨텍스트가 아직 준비되지 않았습니다.".to_string())?;
 

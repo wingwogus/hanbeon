@@ -3,7 +3,7 @@
     "windows": [
       {
         "label": "floating",
-        "url": "index.html",
+        "url": "settings/",
         "width": 360,
         "height": 280
       }

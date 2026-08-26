@@ -1,6 +1,7 @@
 'use client'
 
 import { Center, Text } from '@devup-ui/react'
+import { invoke } from '@tauri-apps/api/core'
 import { useEffect, useState } from 'react'
 
 import { Onboarding } from '@/components/settings/Onboarding'
@@ -10,6 +11,19 @@ import { getProfile, type Profile } from '@/lib/profile'
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [failed, setFailed] = useState(false)
+
+  // 안드로이드: 웹뷰가 뜬 직후 오버레이 서비스를 자동 시작한다. 기본 화면이
+  // 설정이므로 여기서 서비스를 살려야 오버레이 컨트롤러가 뜬다.
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return
+    if (!/android/i.test(navigator.userAgent)) return
+    const timer = setTimeout(() => {
+      void invoke('start_overlay_service').catch((error) => {
+        console.error('오버레이 서비스 시작 실패', error)
+      })
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     getProfile()
