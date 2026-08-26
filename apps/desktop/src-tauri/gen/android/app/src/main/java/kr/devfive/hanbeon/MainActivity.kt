@@ -42,10 +42,12 @@ class MainActivity : TauriActivity() {
     intent?.removeExtra(EXTRA_SCREEN)
     if (screen == currentScreen) return
 
+    // wry는 상대경로를 그대로 loadUrl하면 DNS 조회로 실패한다. 반드시
+    // tauri asset origin 절대 URL을 써야 한다.
     val target =
       when (screen) {
-        "floating" -> "index.html"
-        else -> "settings/index.html"
+        "floating" -> "http://tauri.localhost/index.html"
+        else -> "http://tauri.localhost/settings/"
       }
     (webView as? RustWebView)?.loadUrlMainThread(target) ?: return
     currentScreen = screen
