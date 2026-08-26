@@ -24,7 +24,6 @@ pub const EVENT_FIRMWARE: &str = "arduino://firmware";
 /// ATmega328P의 SPM 페이지 크기(optiboot가 한 번에 쓰는 단위).
 const FLASH_PAGE_BYTES: usize = 128;
 /// Uno R3 bootloader 영역(512 bytes)을 제외한 애플리케이션 플래시 한계.
-const UNO_APPLICATION_BYTES: u32 = 32_256;
 /// optiboot 부팅 창을 몇 번까지 기다려 볼지. DTR 리셋 후 부트로더가 잠깐만
 /// 열리므로 arduino-cli의 재시도 동작을 그대로 옮긴다.
 const SYNC_ATTEMPTS: usize = 12;
@@ -632,8 +631,8 @@ fn flash_with_retry(
         }
         let flash_result = match family {
             BootloaderFamily::Stk500v1 => {
-                let port = open_flash_port(&active_candidate.port)
-                    .map_err(InstallFailure::Upload)?;
+                let port =
+                    open_flash_port(&active_candidate.port).map_err(InstallFailure::Upload)?;
                 let mut flash_port = Box::new(port) as Box<dyn SerialIo>;
                 let mut written_bytes = 0usize;
                 let result = flasher::synchronize(flash_port.as_mut(), SYNC_ATTEMPTS, cancelled)
