@@ -9,7 +9,9 @@
 //! only the thin `SerialIo` impl touches real hardware.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,6 +21,9 @@ use std::time::{Duration, Instant};
 pub struct FlashImage {
     /// Sparse page map keyed by word address (STK500 uses word addressing).
     pages: Vec<(u16, Vec<u8>)>,
+    /// Sparse byte segments keyed by absolute flash address. Unlike STK500,
+    /// UF2 uses byte addressing and can represent the full Intel HEX range.
+    byte_segments: Vec<(u32, Vec<u8>)>,
 }
 
 impl FlashImage {
@@ -90,10 +95,13 @@ impl FlashImage {
             for (_, byte) in chunk {
                 payload.push(*byte);
             }
-            image.pages.push((
-                u16::try_from(byte_address / 2).map_err(|_| "주소가 범위를 벗어났습니다")?,
-                payload,
-            ));
+            image.byte_segments.push((byte_address, payload.clone()));
+            // AVR의 STK500v1 address field is a 16-bit word address. Keep its
+            // existing representation for that uploader, while preserving
+            // high-address data above for byte-addressed UF2 targets.
+            if let Ok(word_address) = u16::try_from(byte_address / 2) {
+                image.pages.push((word_address, payload));
+            }
             start += chunk_end;
         }
         Ok(image)
@@ -104,7 +112,7 @@ impl FlashImage {
     }
 
     pub fn total_bytes(&self) -> usize {
-        self.pages.iter().map(|(_, data)| data.len()).sum()
+        self.byte_segments.iter().map(|(_, data)| data.len()).sum()
     }
 
     pub fn highest_byte_address(&self) -> Option<u32> {
@@ -161,6 +169,255 @@ impl FlashImage {
             })
             .collect()
     }
+
+    fn byte_segments(&self) -> &[(u32, Vec<u8>)] {
+        &self.byte_segments
+    }
+}
+
+/// Bootloader transport selected by the board platform in its Arduino FQBN.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootloaderFamily {
+    Stk500v1,
+    Uf2,
+}
+
+/// Selects the bootloader transport from the registry-provided FQBN.
+///
+/// Unknown platforms retain the established STK500v1 path so existing AVR
+/// registry entries remain compatible; registry-supported nRF52 XIAO boards
+/// explicitly select the UF2 path.
+pub fn family_for_fqbn(fqbn: &str) -> BootloaderFamily {
+    if fqbn.starts_with("Seeeduino:nrf52") {
+        BootloaderFamily::Uf2
+    } else {
+        BootloaderFamily::Stk500v1
+    }
+}
+
+const UF2_MAGIC_START0: u32 = 0x0A32_4655;
+const UF2_MAGIC_START1: u32 = 0x9E5D_5157;
+const UF2_FLAGS_FAMILY_ID_PRESENT: u32 = 0x0000_2000;
+const UF2_PAYLOAD_SIZE: usize = 256;
+const UF2_BLOCK_SIZE: usize = 512;
+const UF2_MAGIC_END: u32 = 0x0AB1_6F30;
+
+/// Encodes an Intel HEX image as UF2 blocks for a mass-storage bootloader.
+///
+/// The UF2 family ID occupies the standard header's final word when the
+/// family-ID-present flag is set. Each block carries a fixed 256-byte payload
+/// and targets the absolute byte address from the Intel HEX input.
+pub fn encode_uf2(hex_image: &FlashImage, family_id: u32) -> Vec<u8> {
+    let blocks: Vec<(u32, &[u8])> = hex_image
+        .byte_segments()
+        .iter()
+        .flat_map(|(address, data)| {
+            data.chunks(UF2_PAYLOAD_SIZE)
+                .enumerate()
+                .map(move |(index, payload)| {
+                    (*address + (index * UF2_PAYLOAD_SIZE) as u32, payload)
+                })
+        })
+        .collect();
+    let total_blocks = blocks.len() as u32;
+    let mut output = Vec::with_capacity(blocks.len() * UF2_BLOCK_SIZE);
+
+    for (sequence, (address, payload)) in blocks.into_iter().enumerate() {
+        let mut block = [0_u8; UF2_BLOCK_SIZE];
+        let header = [
+            UF2_MAGIC_START0,
+            UF2_MAGIC_START1,
+            UF2_FLAGS_FAMILY_ID_PRESENT,
+            address,
+            UF2_PAYLOAD_SIZE as u32,
+            sequence as u32,
+            total_blocks,
+            family_id,
+        ];
+        for (index, word) in header.into_iter().enumerate() {
+            block[index * 4..(index + 1) * 4].copy_from_slice(&word.to_le_bytes());
+        }
+        block[32..32 + payload.len()].copy_from_slice(payload);
+        block[508..512].copy_from_slice(&UF2_MAGIC_END.to_le_bytes());
+        output.extend_from_slice(&block);
+    }
+    output
+}
+
+/// Source of mounted volumes, isolated so UF2 writing is testable without a
+/// physical board.
+pub trait DriveProbe {
+    fn volumes(&self) -> Vec<PathBuf>;
+}
+
+/// macOS volume probe for XIAO's TinyUSB mass-storage bootloader.
+pub struct MacVolumes;
+
+impl DriveProbe for MacVolumes {
+    fn volumes(&self) -> Vec<PathBuf> {
+        fs::read_dir("/Volumes")
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_dir()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_uppercase().contains("XIAO"))
+            })
+            .collect()
+    }
+}
+
+/// UF2 mass-storage uploader parameterized by its mounted-volume probe.
+pub struct Uf2Flasher<P = MacVolumes> {
+    probe: P,
+}
+
+impl<P: DriveProbe> Uf2Flasher<P> {
+    pub fn new(probe: P) -> Self {
+        Self { probe }
+    }
+
+    /// Writes the UF2 file into the one connected XIAO bootloader volume.
+    pub fn flash(&self, uf2_bytes: &[u8]) -> Result<(), FlashError> {
+        let volumes = self.probe.volumes();
+        let volume = match volumes.as_slice() {
+            [] => {
+                return Err(FlashError::Uf2(
+                    "XIAO UF2 부트로더 드라이브를 찾지 못했습니다.".to_owned(),
+                ));
+            }
+            [volume] => volume,
+            _ => {
+                return Err(FlashError::Uf2(
+                    "XIAO UF2 부트로더 드라이브가 여러 개 연결되어 있습니다.".to_owned(),
+                ));
+            }
+        };
+        fs::write(volume.join("hanbeon.uf2"), uf2_bytes)
+            .map_err(|error| FlashError::Uf2(format!("UF2 파일을 쓰지 못했습니다: {error}")))
+    }
+}
+
+impl Uf2Flasher<MacVolumes> {
+    pub fn macos() -> Self {
+        Self::new(MacVolumes)
+    }
+}
+
+/// Seeed 코어가 번들한 adafruit-nrfutil 바이너리 경로를 찾는다.
+fn find_adafruit_nrfutil() -> Result<PathBuf, FlashError> {
+    // 우선순위: Arduino15 패키지 폴더(Seeed 코어 설치 시 자동 생성) -> PATH
+    let home = std::env::var("HOME").unwrap_or_default();
+    let bundled =
+        PathBuf::from(home).join("Library/Arduino15/packages/Seeeduino/tools/adafruit-nrfutil");
+    if let Ok(entries) = fs::read_dir(&bundled) {
+        for entry in entries.flatten() {
+            let macos = entry.path().join("macos/adafruit-nrfutil");
+            if macos.is_file() {
+                return Ok(macos);
+            }
+        }
+    }
+    // PATH에서도 탐색 (CLI 환경 대비)
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join("adafruit-nrfutil");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(FlashError::Uf2(
+        "adafruit-nrfutil을 찾지 못했습니다. Seeed nRF52 코어를 설치해 주세요.".to_owned(),
+    ))
+}
+
+/// 부트로더에 시리얼 DFU로 Intel HEX 펌웨어를 올린다.
+///
+/// Seeed nRF52 코어가 사용하는 `adafruit-nrfutil` 호출과 같은 형식으로
+/// HEX를 DFU zip으로 패키징한 뒤, 1200bps 터치로 진입한 부트로더에 올린다.
+pub fn flash_serial_dfu(port_name: &str, hex_text: &str) -> Result<(), FlashError> {
+    use std::process::Command;
+
+    let nrfutil = find_adafruit_nrfutil()?;
+    let work = std::env::temp_dir().join(format!("hanbeon-dfu-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&work);
+    fs::create_dir_all(&work)
+        .map_err(|error| FlashError::Uf2(format!("작업 폴더 생성 실패: {error}")))?;
+
+    let hex_path = work.join("firmware.hex");
+    fs::write(&hex_path, hex_text)
+        .map_err(|error| FlashError::Uf2(format!("HEX 쓰기 실패: {error}")))?;
+
+    // 애플리케이션만 패키징한다. `0x0123`은 Seeed XIAO nRF52840(Sense)의
+    // boards.txt에 정의된 S140 7.3.0 SoftDevice firmware ID다.
+    let zip_path = work.join("firmware.zip");
+    let package = Command::new(&nrfutil)
+        .args([
+            "dfu",
+            "genpkg",
+            "--dev-type",
+            "0x0052",
+            "--sd-req",
+            "0x0123",
+            "--application",
+            &hex_path.to_string_lossy(),
+            &zip_path.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|error| FlashError::Uf2(format!("nrfutil 실행 실패: {error}")))?;
+    if !package.status.success() {
+        return Err(FlashError::Uf2(format!(
+            "DFU 패키징 실패: {}",
+            String::from_utf8_lossy(&package.stderr).trim()
+        )));
+    }
+
+    // 시리얼 DFU 업로드 (부트로더 모드 상태여야 한다)
+    let upload = Command::new(&nrfutil)
+        .args([
+            "dfu",
+            "serial",
+            "-pkg",
+            &zip_path.to_string_lossy(),
+            "-p",
+            port_name,
+            "-b",
+            "115200",
+            "--singlebank",
+        ])
+        .output()
+        .map_err(|error| FlashError::Uf2(format!("DFU 업로드 실행 실패: {error}")))?;
+    let _ = fs::remove_dir_all(&work);
+    if !upload.status.success() {
+        return Err(FlashError::Uf2(format!(
+            "DFU 업로드 실패: {}",
+            String::from_utf8_lossy(&upload.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+pub fn request_bootloader(port_name: &str) -> Result<(), FlashError> {
+    // TinyUSB CDC의 DFU 진입 조건은 3단계다: (1) 115200으로 CDC 세션 성립,
+    // (2) 1200bps로 레이트 변경, (3) DTR을 내리며 닫기. 1200으로 바로 열면
+    // line_coding 변경 이벤트가 없어 부트로더로 들어가지 않는다.
+    for baud_rate in [115_200, 1200] {
+        let port = serialport::new(port_name, baud_rate)
+            .timeout(Duration::from_millis(500))
+            .open()
+            .map_err(|error| {
+                FlashError::Uf2(format!("부트로더 요청 포트를 열지 못했습니다: {error}"))
+            })?;
+        thread::sleep(Duration::from_millis(500));
+        drop(port);
+    }
+    Ok(())
 }
 
 struct IhexRecord {
@@ -234,6 +491,7 @@ pub enum FlashError {
     Sync,
     Protocol(String),
     Io(String),
+    Uf2(String),
     Cancelled,
 }
 
@@ -246,6 +504,7 @@ impl std::fmt::Display for FlashError {
             ),
             Self::Protocol(detail) => write!(f, "부트로더 응답이 잘못되었습니다: {detail}"),
             Self::Io(detail) => write!(f, "시리얼 통신 오류: {detail}"),
+            Self::Uf2(detail) => write!(f, "UF2 업로드 오류: {detail}"),
             Self::Cancelled => write!(f, "설치가 취소되었습니다"),
         }
     }
@@ -414,7 +673,10 @@ pub fn program(
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::mpsc;
+
+    static TEMP_DIR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
     /// Scripted fake port: asserts every write matches an expectation and
     /// produces queued responses, like a mock server for the bootloader.
@@ -476,6 +738,91 @@ mod tests {
 
     const OK_RESPONSE: [u8; 2] = [STK_INSYNC, STK_OK];
     const SIGNATURE_RESPONSE: [u8; 5] = [STK_INSYNC, 0x1E, 0x95, 0x0F, STK_OK];
+
+    struct FakeDriveProbe {
+        volumes: Vec<PathBuf>,
+    }
+
+    impl DriveProbe for FakeDriveProbe {
+        fn volumes(&self) -> Vec<PathBuf> {
+            self.volumes.clone()
+        }
+    }
+
+    fn test_dir(tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "hanbeon-uf2-test-{tag}-{}-{}",
+            std::process::id(),
+            TEMP_DIR_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temporary volume");
+        path
+    }
+
+    fn word(block: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(block[offset..offset + 4].try_into().expect("u32 word"))
+    }
+
+    #[test]
+    fn family_for_fqbn_selects_stk500_and_uf2() {
+        assert_eq!(
+            family_for_fqbn("arduino:avr:uno"),
+            BootloaderFamily::Stk500v1
+        );
+        assert_eq!(
+            family_for_fqbn("Seeeduino:nrf52:xiaonRF52840Sense"),
+            BootloaderFamily::Uf2
+        );
+        assert_eq!(
+            family_for_fqbn("other:platform:board"),
+            BootloaderFamily::Stk500v1
+        );
+    }
+
+    #[test]
+    fn encode_uf2_has_expected_headers_and_payloads() {
+        let image = FlashImage::from_ihex(":020000040001F9\n:02000000AABB99\n:00000001FF\n")
+            .expect("parse image");
+        let encoded = encode_uf2(&image, 0x621E_11BE);
+        assert_eq!(encoded.len(), UF2_BLOCK_SIZE);
+        let block = &encoded[..UF2_BLOCK_SIZE];
+        assert_eq!(word(block, 0), UF2_MAGIC_START0);
+        assert_eq!(word(block, 4), UF2_MAGIC_START1);
+        assert_eq!(word(block, 8), UF2_FLAGS_FAMILY_ID_PRESENT);
+        assert_eq!(word(block, 12), 0x0001_0000);
+        assert_eq!(word(block, 16), UF2_PAYLOAD_SIZE as u32);
+        assert_eq!(word(block, 20), 0);
+        assert_eq!(word(block, 24), 1);
+        assert_eq!(word(block, 28), 0x621E_11BE);
+        assert_eq!(&block[32..34], &[0xAA, 0xBB]);
+        assert!(block[34..508].iter().all(|byte| *byte == 0));
+        assert_eq!(word(block, 508), UF2_MAGIC_END);
+    }
+
+    #[test]
+    fn uf2_flasher_writes_matched_volume_and_rejects_ambiguous_drives() {
+        let volume = test_dir("matched");
+        let flasher = Uf2Flasher::new(FakeDriveProbe {
+            volumes: vec![volume.clone()],
+        });
+        flasher.flash(b"UF2").expect("write UF2");
+        assert_eq!(
+            fs::read(volume.join("hanbeon.uf2")).expect("read UF2"),
+            b"UF2"
+        );
+
+        let zero = Uf2Flasher::new(FakeDriveProbe { volumes: vec![] });
+        assert!(matches!(zero.flash(b"UF2"), Err(FlashError::Uf2(_))));
+
+        let second = test_dir("second");
+        let multiple = Uf2Flasher::new(FakeDriveProbe {
+            volumes: vec![volume.clone(), second.clone()],
+        });
+        assert!(matches!(multiple.flash(b"UF2"), Err(FlashError::Uf2(_))));
+        let _ = fs::remove_dir_all(volume);
+        let _ = fs::remove_dir_all(second);
+    }
 
     #[test]
     fn ihex_parses_data_eof_and_extended_addresses() {

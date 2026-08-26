@@ -1,4 +1,4 @@
-//! Hana Cloud (https://github.com/dev-five-git/hana-cloud) board registry client.
+//! Hana Cloud (https://github.com/dev-five-git/hana-cloud) board-registry client.
 //!
 //! Downloads and verifies the root index, board manifests, and firmware files.
 //! The contract from the registry README is binding:
@@ -604,6 +604,29 @@ mod tests {
         .to_vec()
     }
 
+    fn xiao_index() -> Vec<u8> {
+        br#"{
+            "schemaVersion": 1,
+            "revision": 4,
+            "apps": [],
+            "boards": [{
+                "id": "seeed.xiao-nrf52840-sense",
+                "name": "Seeed XIAO nRF52840 Sense",
+                "manifest": "boards/seeed-xiao-nrf52840-sense.json",
+                "sha256": "f3842b609b55f75cb00f2a2fda3e12cb2f11b0f24c9b793aa12dd8565ea9889b",
+                "detect": {"usb": [
+                    {"vid": "2886", "pid": "8045", "confidence": "exact",
+                        "manufacturerAliases": ["Seeed Studio"],
+                        "productAliases": ["XIAO nRF52840 Sense"]},
+                    {"vid": "2886", "pid": "0045", "confidence": "exact",
+                        "manufacturerAliases": ["Seeed Studio"],
+                        "productAliases": ["XIAO nRF52840 Sense"]}
+                ]}
+            }]
+        }"#
+        .to_vec()
+    }
+
     #[test]
     fn normalization_matches_registry_contract_vectors() {
         assert_eq!(normalize_descriptor(" Arduino UNO_R3 "), "arduino-uno-r3");
@@ -643,6 +666,25 @@ mod tests {
         assert_eq!(matched.board_id, "arduino.uno-r3");
         assert_eq!(matched.confidence, Confidence::Exact);
         assert_eq!(matched.manifest_path, "boards/arduino-uno-r3.json");
+    }
+
+    #[test]
+    fn xiao_bootloader_and_application_usb_ids_match_exactly() {
+        let index = parse_index(&xiao_index()).expect("parse XIAO index");
+        for pid in [0x8045, 0x0045] {
+            let matched = match_board(
+                &index,
+                &UsbIdentity {
+                    vid: 0x2886,
+                    pid,
+                    product: Some("XIAO nRF52840 Sense".to_owned()),
+                    manufacturer: Some("Seeed Studio".to_owned()),
+                },
+            )
+            .expect("XIAO must match");
+            assert_eq!(matched.board_id, "seeed.xiao-nrf52840-sense");
+            assert_eq!(matched.confidence, Confidence::Exact);
+        }
     }
 
     #[test]
@@ -803,6 +845,10 @@ mod tests {
                 .to_owned()
         };
         assert_eq!(host_of(REGISTRY_BASE), "raw.githubusercontent.com");
+        assert_eq!(
+            REGISTRY_BASE,
+            "https://raw.githubusercontent.com/dev-five-git/hana-cloud/main"
+        );
         assert_ne!(
             host_of("https://evil.example/registry.json"),
             host_of(REGISTRY_BASE)

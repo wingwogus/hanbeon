@@ -17,8 +17,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::arduino::{
     ArduinoCoordinator, BAUD_RATE, HANDSHAKE_REQUEST, HANDSHAKE_RESPONSE, InstallerExit,
 };
-use crate::flasher::{FlashImage, SerialIo};
-use crate::registry::{RegistryClient, RegistryError, UsbIdentity};
+use crate::flasher::{BootloaderFamily, FlashImage, SerialIo, family_for_fqbn, request_bootloader};
+use crate::registry::{RegistryClient, RegistryError, UsbIdentity, VerifiedFirmware};
 
 pub const EVENT_FIRMWARE: &str = "arduino://firmware";
 /// ATmega328P의 SPM 페이지 크기(optiboot가 한 번에 쓰는 단위).
@@ -564,7 +564,7 @@ fn download_firmware(
     app: &AppHandle,
     candidate: &ArduinoCandidate,
     cancelled: &AtomicBool,
-) -> Result<FlashImage, InstallFailure> {
+) -> Result<VerifiedFirmware, InstallFailure> {
     ensure_not_cancelled(cancelled)?;
     let cache_dir = registry_cache_dir(app).map_err(InstallFailure::Download)?;
     let client = RegistryClient::new(cache_dir);
@@ -595,20 +595,24 @@ fn download_firmware(
             ),
             other => InstallFailure::Download(other.to_string()),
         })?;
-    let image = FlashImage::from_ihex(&firmware.hex_text)
-        .map_err(|error| InstallFailure::Download(format!("펌웨어 해석 실패: {error}")))?;
-    if !image.fits_within(UNO_APPLICATION_BYTES) {
-        return Err(InstallFailure::Download(
-            "펌웨어가 Arduino Uno R3 애플리케이션 영역을 벗어납니다.".to_owned(),
-        ));
+    Ok(firmware)
+}
+
+impl From<crate::flasher::FlashError> for InstallFailure {
+    fn from(error: crate::flasher::FlashError) -> Self {
+        match error {
+            crate::flasher::FlashError::Cancelled => InstallFailure::Cancelled,
+            other => InstallFailure::Upload(other.to_string()),
+        }
     }
-    Ok(image)
 }
 
 fn flash_with_retry(
     app: &AppHandle,
     candidate: &ArduinoCandidate,
     image: &FlashImage,
+    hex_text: &str,
+    family: BootloaderFamily,
     cancelled: &AtomicBool,
 ) -> Result<(), InstallFailure> {
     let mut last_error = String::new();
@@ -626,25 +630,37 @@ fn flash_with_retry(
                 },
             );
         }
-        let port = open_flash_port(&active_candidate.port).map_err(InstallFailure::Upload)?;
-        let mut flash_port = Box::new(port) as Box<dyn SerialIo>;
-        let mut written_bytes = 0usize;
-        let flash_result = flasher::synchronize(flash_port.as_mut(), SYNC_ATTEMPTS, cancelled)
-            .and_then(|()| {
-                flasher::program(
-                    flash_port.as_mut(),
-                    image,
-                    FLASH_PAGE_BYTES,
-                    cancelled,
-                    &mut |written| {
-                        // 페이지 경계마다만 기록하면 충분하다.
-                        if written / FLASH_PAGE_BYTES != written_bytes / FLASH_PAGE_BYTES {
-                            written_bytes = written;
-                        }
-                    },
-                )
-            });
-        drop(flash_port);
+        let flash_result = match family {
+            BootloaderFamily::Stk500v1 => {
+                let port = open_flash_port(&active_candidate.port)
+                    .map_err(InstallFailure::Upload)?;
+                let mut flash_port = Box::new(port) as Box<dyn SerialIo>;
+                let mut written_bytes = 0usize;
+                let result = flasher::synchronize(flash_port.as_mut(), SYNC_ATTEMPTS, cancelled)
+                    .and_then(|()| {
+                        flasher::program(
+                            flash_port.as_mut(),
+                            image,
+                            FLASH_PAGE_BYTES,
+                            cancelled,
+                            &mut |written| {
+                                // 페이지 경계마다만 기록하면 충분하다.
+                                if written / FLASH_PAGE_BYTES != written_bytes / FLASH_PAGE_BYTES {
+                                    written_bytes = written;
+                                }
+                            },
+                        )
+                    });
+                drop(flash_port);
+                result
+            }
+            BootloaderFamily::Uf2 => {
+                // XIAO nRF52840의 부트로더는 UF2 드라이브가 아니라 시리얼 DFU
+                // (adafruit-nrfutil)다. 부트로더 터치 후 nrfutil DFU 업로드.
+                request_bootloader(&active_candidate.port)?;
+                flasher::flash_serial_dfu(&active_candidate.port, hex_text)
+            }
+        };
         match flash_result {
             Ok(()) => return Ok(()),
             Err(flasher::FlashError::Cancelled) => return Err(InstallFailure::Cancelled),
@@ -667,7 +683,10 @@ fn install(
     cancelled: &AtomicBool,
 ) -> Result<(), InstallFailure> {
     ensure_not_cancelled(cancelled)?;
-    let image = download_firmware(app, candidate, cancelled)?;
+    let firmware = download_firmware(app, candidate, cancelled)?;
+    let image = FlashImage::from_ihex(&firmware.hex_text)
+        .map_err(|error| InstallFailure::Download(format!("펌웨어 해석 실패: {error}")))?;
+    let family = family_for_fqbn(&firmware.fqbn);
 
     ensure_not_cancelled(cancelled)?;
     emit(
@@ -676,7 +695,14 @@ fn install(
             device_id: device_id.to_owned(),
         },
     );
-    flash_with_retry(app, candidate, &image, cancelled)?;
+    flash_with_retry(
+        app,
+        candidate,
+        &image,
+        &firmware.hex_text,
+        family,
+        cancelled,
+    )?;
     ensure_not_cancelled(cancelled)?;
     emit(
         app,

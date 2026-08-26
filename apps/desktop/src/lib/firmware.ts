@@ -55,15 +55,15 @@ export type FirmwareState =
 export const INITIAL_FIRMWARE_STATE: FirmwareState = { state: 'idle' }
 
 export const FIRMWARE_COPY = {
-  startTitle: '한번을 Arduino 버튼과 연결해 볼게요',
+  startTitle: '한번을 버튼 보드와 연결해 볼게요',
   suppliesHeading: '준비물:',
-  supplyUno: 'Arduino Uno R3',
+  supplyUno: '지원되는 버튼 보드',
   supplyUsb: 'USB 케이블',
   supplyButton: '연결된 아케이드 버튼',
   startAction: '시작하기',
-  connect: 'Arduino Uno를 USB로 연결해 주세요',
-  found: 'Arduino Uno를 찾았습니다',
-  chooseBoard: '연결할 Arduino Uno를 선택해 주세요',
+  connect: '지원되는 버튼 보드를 USB로 연결해 주세요',
+  found: '지원되는 버튼 보드를 찾았습니다',
+  chooseBoard: '연결할 버튼 보드를 선택해 주세요',
   continue: '다음',
   alreadyInstalled: '전용 펌웨어가 이미 설치되어 있습니다',
   confirmNeed: '버튼을 사용하려면 전용 펌웨어를 설치해야 합니다.',
@@ -75,11 +75,11 @@ export const FIRMWARE_COPY = {
   later: '나중에 하기',
   retry: '다시 시도',
   installing: '설치가 진행 중',
-  unoOnly: '이 설치는 공식 Arduino Uno R3만 지원합니다.',
+  unoOnly: '등록된 버튼 보드의 전용 펌웨어를 설치합니다.',
 } as const
 
 export const FIRMWARE_ERROR_COPY: Record<FirmwareErrorCode, string> = {
-  notFound: 'Arduino를 찾지 못했습니다',
+  notFound: '지원되는 버튼 보드를 찾지 못했습니다',
   portUnavailable: '포트를 사용할 수 없습니다',
   downloadFailed: '펌웨어를 내려받지 못했습니다',
   uploadFailed: '펌웨어 전송에 실패했습니다',

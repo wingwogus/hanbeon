@@ -62,11 +62,11 @@ describe('Arduino firmware lifecycle contract', () => {
     expect(phases.every(firmwareOwnsPort)).toBe(true)
   })
 
-  test('uses the requested connect copy while searching', () => {
+  test('uses board-neutral copy while searching', () => {
     expect(firmwareStatusText({ state: 'searching' })).toBe(
-      'Arduino Uno를 USB로 연결해 주세요',
+      '지원되는 버튼 보드를 USB로 연결해 주세요',
     )
-    expect(FIRMWARE_COPY.startTitle).toBe('한번을 Arduino 버튼과 연결해 볼게요')
+    expect(FIRMWARE_COPY.startTitle).toBe('한번을 버튼 보드와 연결해 볼게요')
     expect(FIRMWARE_COPY.startAction).toBe('시작하기')
   })
 
@@ -123,7 +123,9 @@ describe('Arduino firmware lifecycle contract', () => {
   })
 
   test('maps retryable installer failures without raw port names', () => {
-    expect(firmwareErrorText('notFound')).toBe('Arduino를 찾지 못했습니다')
+    expect(firmwareErrorText('notFound')).toBe(
+      '지원되는 버튼 보드를 찾지 못했습니다',
+    )
     expect(firmwareErrorText('portUnavailable')).toBe(
       '포트를 사용할 수 없습니다',
     )
@@ -151,7 +153,7 @@ describe('Arduino firmware lifecycle contract', () => {
         code: 'notFound',
         retryable: false,
       }),
-    ).toBe('Arduino를 찾지 못했습니다')
+    ).toBe('지원되는 버튼 보드를 찾지 못했습니다')
     expect(firmwareErrorText('raw stderr')).toBe(
       '펌웨어 설치 중 문제가 발생했습니다',
     )

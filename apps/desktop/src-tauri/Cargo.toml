@@ -29,6 +29,10 @@ reqwest = { version = "0.13.4", default-features = false, features = ["blocking"
 ureq = "3.4.0"
 sha2 = "0.11.0"
 unicode-normalization = "0.1.25"
+btleplug = { version = "0.11", features = ["serde"] }
+futures = "0.3.34"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+uuid = "1.25.0"
 
 # 이후 단계에서 붙일 crate. 버전은 반드시 `cargo add`로 확정한다.
 #   cargo add tauri-plugin-store             # 사용자 프로필 영속화 (M3)

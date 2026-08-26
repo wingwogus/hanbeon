@@ -267,13 +267,13 @@ describe('Arduino firmware setup screens', () => {
     })
 
     expect(textOf(view.container)).toInclude(
-      'Arduino Uno를 USB로 연결해 주세요',
+      '지원되는 버튼 보드를 USB로 연결해 주세요',
     )
     expect(
       view.container.querySelector('[data-state]')?.getAttribute('data-state'),
     ).toBe('searching')
     expect(view.container.querySelector('output')?.textContent).toInclude(
-      'Arduino Uno를 USB로 연결해 주세요',
+      '지원되는 버튼 보드를 USB로 연결해 주세요',
     )
   })
 
@@ -283,7 +283,7 @@ describe('Arduino firmware setup screens', () => {
       candidates: [UNO],
     })
 
-    expect(textOf(view.container)).toInclude('Arduino Uno를 찾았습니다')
+    expect(textOf(view.container)).toInclude('지원되는 버튼 보드를 찾았습니다')
     expect(textOf(view.container)).toInclude('Arduino Uno')
     expect(textOf(view.container)).toInclude('2341:0043')
     expect(textOf(view.container)).not.toInclude('/dev/cu.usbmodem1401')
@@ -300,9 +300,7 @@ describe('Arduino firmware setup screens', () => {
       candidates: [UNO, UNO_TWO],
     })
 
-    expect(textOf(view.container)).toInclude(
-      '연결할 Arduino Uno를 선택해 주세요',
-    )
+    expect(textOf(view.container)).toInclude('연결할 버튼 보드를 선택해 주세요')
     expect(buttonNamed(view.container, '다음')?.hasAttribute('disabled')).toBe(
       true,
     )

@@ -11,7 +11,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as _, ScanFilter};
+use btleplug::platform::Manager as BleManager;
+use futures::StreamExt;
 use serde::Serialize;
+use tokio::runtime::Builder as TokioRuntimeBuilder;
+use uuid::Uuid;
 
 use crate::input::{Judgement, SharedDetector};
 
@@ -26,6 +31,11 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(500);
 const HANDSHAKE_ATTEMPTS: usize = 4;
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 const OUTPUT_QUEUE_CAPACITY: usize = 32;
+const BLE_RETRY_DELAY: Duration = Duration::from_secs(2);
+const BLE_SCAN_WINDOW: Duration = Duration::from_secs(2);
+const HANBEON_XIAO_NAME: &str = "HanBeon XIAO";
+const NUS_SERVICE_UUID: Uuid = Uuid::from_u128(0x6e40_0001_b5a3_f393_e0a9_e50e_24dc_ca9e);
+const NUS_TX_UUID: Uuid = Uuid::from_u128(0x6e40_0003_b5a3_f393_e0a9_e50e_24dc_ca9e);
 
 type ActiveOutput = Option<(u64, SyncSender<OutputCommand>)>;
 
@@ -326,6 +336,43 @@ impl ArduinoSwitch {
 }
 
 impl Drop for ArduinoSwitch {
+    fn drop(&mut self) {
+        self.join_worker();
+    }
+}
+
+/// BLE Nordic UART Service transport for the XIAO nRF52840.
+///
+/// It is intentionally input-only today: native scan output remains available
+/// whenever the USB CDC transport is connected, while a wireless switch routes
+/// P/R records through the same parser and gesture detector.
+pub struct BleSwitch {
+    shutdown: mpsc::Sender<()>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl BleSwitch {
+    pub fn spawn<S>(on_switch: S) -> Self
+    where
+        S: Fn(SwitchEvent) + Send + 'static,
+    {
+        let (shutdown, shutdown_rx) = mpsc::channel();
+        let worker = thread::spawn(move || run_ble_worker(Shutdown::new(shutdown_rx), on_switch));
+        Self {
+            shutdown,
+            worker: Some(worker),
+        }
+    }
+
+    fn join_worker(&mut self) {
+        let _ = self.shutdown.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for BleSwitch {
     fn drop(&mut self) {
         self.join_worker();
     }
@@ -670,6 +717,153 @@ where
             return;
         }
     }
+}
+
+fn run_ble_worker<S>(shutdown: Shutdown, on_switch: S)
+where
+    S: Fn(SwitchEvent),
+{
+    let runtime = match TokioRuntimeBuilder::new_multi_thread()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("[arduino] BLE runtime을 시작하지 못했습니다: {error}");
+            return;
+        }
+    };
+    runtime.block_on(async move {
+        let manager = match BleManager::new().await {
+            Ok(manager) => manager,
+            Err(error) => {
+                eprintln!("[arduino] BLE 어댑터를 열지 못했습니다: {error}");
+                return;
+            }
+        };
+        let adapters = match manager.adapters().await {
+            Ok(adapters) => adapters,
+            Err(error) => {
+                eprintln!("[arduino] BLE 어댑터를 찾지 못했습니다: {error}");
+                return;
+            }
+        };
+        let Some(adapter) = adapters.into_iter().next() else {
+            eprintln!("[arduino] 사용할 BLE 어댑터가 없습니다.");
+            return;
+        };
+
+        loop {
+            if shutdown.is_requested() {
+                return;
+            }
+            if let Err(error) = adapter
+                .start_scan(ScanFilter {
+                    services: vec![NUS_SERVICE_UUID],
+                })
+                .await
+            {
+                eprintln!("[arduino] BLE 스캔을 시작하지 못했습니다: {error}");
+                tokio::time::sleep(BLE_RETRY_DELAY).await;
+                continue;
+            }
+            tokio::time::sleep(BLE_SCAN_WINDOW).await;
+            let peripherals = match adapter.peripherals().await {
+                Ok(peripherals) => peripherals,
+                Err(error) => {
+                    eprintln!("[arduino] BLE 장치 목록을 읽지 못했습니다: {error}");
+                    tokio::time::sleep(BLE_RETRY_DELAY).await;
+                    continue;
+                }
+            };
+            let mut xiao = None;
+            for peripheral in peripherals {
+                let Ok(Some(properties)) = peripheral.properties().await else {
+                    continue;
+                };
+                let is_hanbeon = properties.local_name.as_deref() == Some(HANBEON_XIAO_NAME)
+                    || properties.services.contains(&NUS_SERVICE_UUID);
+                if is_hanbeon {
+                    if std::env::var("HANBEON_LOG").is_ok() {
+                        eprintln!(
+                            "[arduino] BLE found: name={:?}, services={:?}",
+                            properties.local_name, properties.services
+                        );
+                    }
+                    xiao = Some(peripheral);
+                    break;
+                }
+            }
+            let Some(peripheral) = xiao else {
+                tokio::time::sleep(BLE_RETRY_DELAY).await;
+                continue;
+            };
+            if !peripheral.is_connected().await.unwrap_or(false)
+                && peripheral.connect().await.is_err()
+            {
+                tokio::time::sleep(BLE_RETRY_DELAY).await;
+                continue;
+            }
+            if peripheral.discover_services().await.is_err() {
+                let _ = peripheral.disconnect().await;
+                tokio::time::sleep(BLE_RETRY_DELAY).await;
+                continue;
+            }
+            let Some(tx) = peripheral
+                .characteristics()
+                .into_iter()
+                .find(|characteristic| {
+                    characteristic.uuid == NUS_TX_UUID
+                        && characteristic.properties.contains(CharPropFlags::NOTIFY)
+                })
+            else {
+                let _ = peripheral.disconnect().await;
+                tokio::time::sleep(BLE_RETRY_DELAY).await;
+                continue;
+            };
+            if peripheral.subscribe(&tx).await.is_err() {
+                let _ = peripheral.disconnect().await;
+                tokio::time::sleep(BLE_RETRY_DELAY).await;
+                continue;
+            }
+            let Ok(mut notifications) = peripheral.notifications().await else {
+                let _ = peripheral.disconnect().await;
+                thread::sleep(BLE_RETRY_DELAY);
+                continue;
+            };
+            let mut parser = RecordParser::default();
+            let mut press_state = PressState::default();
+            loop {
+                let notification = tokio::select! {
+                    notification = notifications.next() => notification,
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {
+                        if shutdown.is_requested() {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                let Some(notification) = notification else {
+                    break;
+                };
+                if notification.uuid != NUS_TX_UUID {
+                    continue;
+                }
+                for record in parser.push(&notification.value).into_iter().flatten() {
+                    if let Some(event) = press_state.apply(record) {
+                        if std::env::var("HANBEON_LOG").is_ok() {
+                            eprintln!("[arduino] BLE input: {event:?}");
+                        }
+                        on_switch(event);
+                    }
+                }
+            }
+            if let Some(release) = press_state.disconnect() {
+                on_switch(release);
+            }
+            let _ = peripheral.disconnect().await;
+        }
+    });
 }
 
 fn lifecycle_after_connection(shutdown: &Shutdown) -> Option<Lifecycle> {
