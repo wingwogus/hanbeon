@@ -144,23 +144,17 @@ export default function FloatingPage() {
   const extras = indexed.filter(({ cell }) => cell.kind === 'extra')
   const settings = indexed.find(({ cell }) => cell.kind === 'settings')
 
-  // 안드로이드 검증용: 오버레이 서비스를 웹뷰에서 시작한다. 설정 화면이
-  // 안드로이드에 포팅되면 이 버튼과 커맨드를 함께 지운다.
-  const isAndroid =
-    typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent)
-  const startOverlay = () => {
-    void invoke('start_overlay_service').catch((error) => {
-      console.error('오버레이 서비스 시작 실패', error)
-    })
-  }
-
-  // 안드로이드에서는 웹뷰가 뜬 직후 자동 시작한다. ndk-context가 웹뷰 준비
-  // 이후에 초기화되므로 Rust setup 훅에서는 부를 수 없다.
+  // 안드로이드: 웹뷰가 뜬 직후 오버레이 서비스를 자동 시작한다. ndk-context가
+  // 웹뷰 준비 이후에 초기화되므로 Rust setup 훅에서는 부를 수 없다.
   useEffect(() => {
-    if (!isAndroid) return
-    const timer = setTimeout(startOverlay, 1500)
+    if (typeof navigator === 'undefined') return
+    if (!/android/i.test(navigator.userAgent)) return
+    const timer = setTimeout(() => {
+      void invoke('start_overlay_service').catch((error) => {
+        console.error('오버레이 서비스 시작 실패', error)
+      })
+    }, 1500)
     return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const cursorStateAt = (index: number): CursorState => {
@@ -169,148 +163,125 @@ export default function FloatingPage() {
   }
 
   return (
-    <>
-      {/* 안드로이드 검증용: 오버레이 서비스 시작. 설정 화면 포팅 후 지운다. */}
-      <div
-        style={{
-          background: 'red',
-          color: 'white',
-          fontSize: 40,
-          padding: 20,
-          position: 'fixed',
-          top: 60,
-          zIndex: 99999,
-        }}
-      >
-        FLOATING-INDEX-LOADED / 오버레이 시작(검증)
-        <button
-          onClick={startOverlay}
-          style={{ fontSize: 40, height: 90, width: '100%' }}
-          type="button"
+    <VStack
+      aria-label="한번 스위치 컨트롤러"
+      bg="$containerBackground"
+      borderColor={mode === 'paused' ? '$warning' : '$borderBold'}
+      borderRadius="20px"
+      borderStyle="solid"
+      borderWidth="2px"
+      boxSizing="border-box"
+      gap="8px"
+      h="100vh"
+      opacity={dimmed ? cover.percent / 100 : 1}
+      overflow="hidden"
+      p="10px"
+      w="100vw"
+    >
+      <DragHandle />
+
+      <ScanProgress
+        mode={mode}
+        phaseMs={snapshot.phaseMs}
+        remainingMs={snapshot.remainingMs}
+        startedAt={at}
+      />
+
+      {error && (
+        <Box
+          bg="$undoBg"
+          borderRadius="8px"
+          color="$undoText"
+          flexShrink={0}
+          px="8px"
+          py="4px"
         >
-          오버레이 서비스 시작
-        </button>
-      </div>
-      <VStack
-        aria-label="한번 스위치 컨트롤러"
-        bg="$containerBackground"
-        borderColor={mode === 'paused' ? '$warning' : '$borderBold'}
-        borderRadius="20px"
-        borderStyle="solid"
-        borderWidth="2px"
-        boxSizing="border-box"
-        gap="8px"
-        h="100vh"
-        opacity={dimmed ? cover.percent / 100 : 1}
-        overflow="hidden"
-        p="10px"
-        w="100vw"
-      >
-        <DragHandle />
+          <Text typography="caption">{error.message}</Text>
+        </Box>
+      )}
 
-        <ScanProgress
-          mode={mode}
-          phaseMs={snapshot.phaseMs}
-          remainingMs={snapshot.remainingMs}
-          startedAt={at}
-        />
-
-        {error && (
-          <Box
-            bg="$undoBg"
-            borderRadius="8px"
-            color="$undoText"
-            flexShrink={0}
-            px="8px"
-            py="4px"
-          >
-            <Text typography="caption">{error.message}</Text>
-          </Box>
-        )}
-
-        {mode === 'confirm' ? (
-          <UndoPanel />
-        ) : (
-          <VStack flex={1} gap="8px" minH="0">
-            {/* 이동은 왼쪽에 세로로, 선택은 그 오른쪽에 같은 높이로. 옮긴 뒤에
+      {mode === 'confirm' ? (
+        <UndoPanel />
+      ) : (
+        <VStack flex={1} gap="8px" minH="0">
+          {/* 이동은 왼쪽에 세로로, 선택은 그 오른쪽에 같은 높이로. 옮긴 뒤에
               고르는 흐름이 가장 잦아서 둘을 가장 가까이 둔다. 커서도 이동 칸
               바로 뒤에 선택을 한 번씩 들른다. */}
+          <Box
+            display="grid"
+            flexShrink={0}
+            gap="8px"
+            gridTemplateColumns="1fr 1fr"
+            h="128px"
+          >
+            <VStack gap="8px">
+              {moves.map(({ cell, index }) => (
+                <SwitchButton
+                  key={index}
+                  cursor={cursorStateAt(index)}
+                  label={cell.label}
+                  name={cell.name}
+                />
+              ))}
+            </VStack>
+            {enter && (
+              <SwitchButton
+                cursor={cursorStateAt(enter.index)}
+                label={enter.cell.label}
+                name={enter.cell.name}
+              />
+            )}
+          </Box>
+
+          {/* 앱별 칸은 구분선 아래에 따로 모은다. 지금 앱에서만 쓸 수 있고
+              앱이 바뀌면 사라지는 칸이라, 언제나 있는 칸과 섞이면 안 된다. */}
+          {extras.length > 0 && (
+            <Flex alignItems="center" flexShrink={0} gap="8px">
+              <Box bg="$extraBorder" flex={1} h="1px" />
+              <Text color="$caption" typography="caption" whiteSpace="nowrap">
+                {snapshot.preset ?? '앱별 버튼'}
+              </Text>
+              <Box bg="$extraBorder" flex={1} h="1px" />
+            </Flex>
+          )}
+
+          {extras.length > 0 && (
             <Box
               display="grid"
               flexShrink={0}
               gap="8px"
               gridTemplateColumns="1fr 1fr"
-              h="128px"
             >
-              <VStack gap="8px">
-                {moves.map(({ cell, index }) => (
-                  <SwitchButton
-                    key={index}
-                    cursor={cursorStateAt(index)}
-                    label={cell.label}
-                    name={cell.name}
-                  />
-                ))}
-              </VStack>
-              {enter && (
+              {extras.map(({ cell, index }, at) => (
                 <SwitchButton
-                  cursor={cursorStateAt(enter.index)}
-                  label={enter.cell.label}
-                  name={enter.cell.name}
+                  key={index}
+                  cursor={cursorStateAt(index)}
+                  full={at === extras.length - 1 && at % 2 === 0}
+                  label={cell.label}
+                  name={cell.name}
+                  tone="extra"
                 />
-              )}
+              ))}
             </Box>
+          )}
 
-            {/* 앱별 칸은 구분선 아래에 따로 모은다. 지금 앱에서만 쓸 수 있고
-              앱이 바뀌면 사라지는 칸이라, 언제나 있는 칸과 섞이면 안 된다. */}
-            {extras.length > 0 && (
-              <Flex alignItems="center" flexShrink={0} gap="8px">
-                <Box bg="$extraBorder" flex={1} h="1px" />
-                <Text color="$caption" typography="caption" whiteSpace="nowrap">
-                  {snapshot.preset ?? '앱별 버튼'}
-                </Text>
-                <Box bg="$extraBorder" flex={1} h="1px" />
-              </Flex>
-            )}
+          {settings && (
+            <SwitchButton
+              compact
+              cursor={cursorStateAt(settings.index)}
+              label={settings.cell.label}
+              name={settings.cell.name}
+            />
+          )}
+        </VStack>
+      )}
 
-            {extras.length > 0 && (
-              <Box
-                display="grid"
-                flexShrink={0}
-                gap="8px"
-                gridTemplateColumns="1fr 1fr"
-              >
-                {extras.map(({ cell, index }, at) => (
-                  <SwitchButton
-                    key={index}
-                    cursor={cursorStateAt(index)}
-                    full={at === extras.length - 1 && at % 2 === 0}
-                    label={cell.label}
-                    name={cell.name}
-                    tone="extra"
-                  />
-                ))}
-              </Box>
-            )}
-
-            {settings && (
-              <SwitchButton
-                compact
-                cursor={cursorStateAt(settings.index)}
-                label={settings.cell.label}
-                name={settings.cell.name}
-              />
-            )}
-          </VStack>
-        )}
-
-        <StatusLine
-          connection={connection}
-          intervalMs={snapshot.intervalMs}
-          mode={mode}
-          notice={notice}
-        />
-      </VStack>
-    </>
+      <StatusLine
+        connection={connection}
+        intervalMs={snapshot.intervalMs}
+        mode={mode}
+        notice={notice}
+      />
+    </VStack>
   )
 }
