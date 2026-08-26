@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 
 import { DragHandle } from '@/components/DragHandle'
 import { ScanProgress } from '@/components/ScanProgress'
+import { SettingsForm } from '@/components/settings/SettingsForm'
 import { StatusLine } from '@/components/StatusLine'
 import { type CursorState, SwitchButton } from '@/components/SwitchButton'
 import { UndoPanel } from '@/components/UndoPanel'
@@ -24,7 +25,7 @@ import {
   type ArduinoConnection,
   INITIAL_CONNECTION,
 } from '@/lib/arduino'
-import type { IntervalEvent } from '@/lib/profile'
+import { getProfile, type IntervalEvent, type Profile } from '@/lib/profile'
 
 const INITIAL: ScanSnapshot = {
   cursor: 0,
@@ -162,126 +163,162 @@ export default function FloatingPage() {
     return mode === 'dwelling' ? 'dwelling' : 'scanning'
   }
 
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsProfile, setSettingsProfile] = useState<Profile | null>(null)
+  // 설정 화면을 floating 위에 겹쳐 렌더한다. 닫으면 스캔 상태가 유지된다.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const open = () => setSettingsOpen(true)
+    window.addEventListener('hanbeon://open-settings', open)
+    return () => window.removeEventListener('hanbeon://open-settings', open)
+  }, [])
+  useEffect(() => {
+    if (!settingsOpen || settingsProfile) return
+    getProfile()
+      .then(setSettingsProfile)
+      .catch(() => setSettingsOpen(false))
+  }, [settingsOpen, settingsProfile])
+
   return (
-    <VStack
-      aria-label="한번 스위치 컨트롤러"
-      bg="$containerBackground"
-      borderColor={mode === 'paused' ? '$warning' : '$borderBold'}
-      borderRadius="20px"
-      borderStyle="solid"
-      borderWidth="2px"
-      boxSizing="border-box"
-      gap="8px"
-      h="100vh"
-      opacity={dimmed ? cover.percent / 100 : 1}
-      overflow="hidden"
-      p="10px"
-      w="100vw"
-    >
-      <DragHandle />
-
-      <ScanProgress
-        mode={mode}
-        phaseMs={snapshot.phaseMs}
-        remainingMs={snapshot.remainingMs}
-        startedAt={at}
-      />
-
-      {error && (
-        <Box
-          bg="$undoBg"
-          borderRadius="8px"
-          color="$undoText"
-          flexShrink={0}
-          px="8px"
-          py="4px"
+    <>
+      {settingsOpen && settingsProfile && (
+        <div
+          style={{
+            inset: 0,
+            overflowY: 'auto',
+            position: 'fixed',
+            zIndex: 99999,
+          }}
         >
-          <Text typography="caption">{error.message}</Text>
-        </Box>
+          <SettingsForm
+            initial={settingsProfile!}
+            onClose={() => {
+              setSettingsOpen(false)
+              setSettingsProfile(null)
+            }}
+          />
+        </div>
       )}
+      <VStack
+        aria-label="한번 스위치 컨트롤러"
+        bg="$containerBackground"
+        borderColor={mode === 'paused' ? '$warning' : '$borderBold'}
+        borderRadius="20px"
+        borderStyle="solid"
+        borderWidth="2px"
+        boxSizing="border-box"
+        gap="8px"
+        h="100vh"
+        opacity={dimmed ? cover.percent / 100 : 1}
+        overflow="hidden"
+        p="10px"
+        w="100vw"
+      >
+        <DragHandle />
 
-      {mode === 'confirm' ? (
-        <UndoPanel />
-      ) : (
-        <VStack flex={1} gap="8px" minH="0">
-          {/* 이동은 왼쪽에 세로로, 선택은 그 오른쪽에 같은 높이로. 옮긴 뒤에
+        <ScanProgress
+          mode={mode}
+          phaseMs={snapshot.phaseMs}
+          remainingMs={snapshot.remainingMs}
+          startedAt={at}
+        />
+
+        {error && (
+          <Box
+            bg="$undoBg"
+            borderRadius="8px"
+            color="$undoText"
+            flexShrink={0}
+            px="8px"
+            py="4px"
+          >
+            <Text typography="caption">{error.message}</Text>
+          </Box>
+        )}
+
+        {mode === 'confirm' ? (
+          <UndoPanel />
+        ) : (
+          <VStack flex={1} gap="8px" minH="0">
+            {/* 이동은 왼쪽에 세로로, 선택은 그 오른쪽에 같은 높이로. 옮긴 뒤에
               고르는 흐름이 가장 잦아서 둘을 가장 가까이 둔다. 커서도 이동 칸
               바로 뒤에 선택을 한 번씩 들른다. */}
-          <Box
-            display="grid"
-            flexShrink={0}
-            gap="8px"
-            gridTemplateColumns="1fr 1fr"
-            h="128px"
-          >
-            <VStack gap="8px">
-              {moves.map(({ cell, index }) => (
-                <SwitchButton
-                  key={index}
-                  cursor={cursorStateAt(index)}
-                  label={cell.label}
-                  name={cell.name}
-                />
-              ))}
-            </VStack>
-            {enter && (
-              <SwitchButton
-                cursor={cursorStateAt(enter.index)}
-                label={enter.cell.label}
-                name={enter.cell.name}
-              />
-            )}
-          </Box>
-
-          {/* 앱별 칸은 구분선 아래에 따로 모은다. 지금 앱에서만 쓸 수 있고
-              앱이 바뀌면 사라지는 칸이라, 언제나 있는 칸과 섞이면 안 된다. */}
-          {extras.length > 0 && (
-            <Flex alignItems="center" flexShrink={0} gap="8px">
-              <Box bg="$extraBorder" flex={1} h="1px" />
-              <Text color="$caption" typography="caption" whiteSpace="nowrap">
-                {snapshot.preset ?? '앱별 버튼'}
-              </Text>
-              <Box bg="$extraBorder" flex={1} h="1px" />
-            </Flex>
-          )}
-
-          {extras.length > 0 && (
             <Box
               display="grid"
               flexShrink={0}
               gap="8px"
               gridTemplateColumns="1fr 1fr"
+              h="128px"
             >
-              {extras.map(({ cell, index }, at) => (
+              <VStack gap="8px">
+                {moves.map(({ cell, index }) => (
+                  <SwitchButton
+                    key={index}
+                    cursor={cursorStateAt(index)}
+                    label={cell.label}
+                    name={cell.name}
+                  />
+                ))}
+              </VStack>
+              {enter && (
                 <SwitchButton
-                  key={index}
-                  cursor={cursorStateAt(index)}
-                  full={at === extras.length - 1 && at % 2 === 0}
-                  label={cell.label}
-                  name={cell.name}
-                  tone="extra"
+                  cursor={cursorStateAt(enter.index)}
+                  label={enter.cell.label}
+                  name={enter.cell.name}
                 />
-              ))}
+              )}
             </Box>
-          )}
 
-          {settings && (
-            <SwitchButton
-              compact
-              cursor={cursorStateAt(settings.index)}
-              label={settings.cell.label}
-              name={settings.cell.name}
-            />
-          )}
-        </VStack>
-      )}
+            {/* 앱별 칸은 구분선 아래에 따로 모은다. 지금 앱에서만 쓸 수 있고
+              앱이 바뀌면 사라지는 칸이라, 언제나 있는 칸과 섞이면 안 된다. */}
+            {extras.length > 0 && (
+              <Flex alignItems="center" flexShrink={0} gap="8px">
+                <Box bg="$extraBorder" flex={1} h="1px" />
+                <Text color="$caption" typography="caption" whiteSpace="nowrap">
+                  {snapshot.preset ?? '앱별 버튼'}
+                </Text>
+                <Box bg="$extraBorder" flex={1} h="1px" />
+              </Flex>
+            )}
 
-      <StatusLine
-        connection={connection}
-        intervalMs={snapshot.intervalMs}
-        mode={mode}
-        notice={notice}
-      />
-    </VStack>
+            {extras.length > 0 && (
+              <Box
+                display="grid"
+                flexShrink={0}
+                gap="8px"
+                gridTemplateColumns="1fr 1fr"
+              >
+                {extras.map(({ cell, index }, at) => (
+                  <SwitchButton
+                    key={index}
+                    cursor={cursorStateAt(index)}
+                    full={at === extras.length - 1 && at % 2 === 0}
+                    label={cell.label}
+                    name={cell.name}
+                    tone="extra"
+                  />
+                ))}
+              </Box>
+            )}
+
+            {settings && (
+              <SwitchButton
+                compact
+                cursor={cursorStateAt(settings.index)}
+                label={settings.cell.label}
+                name={settings.cell.name}
+              />
+            )}
+          </VStack>
+        )}
+
+        <StatusLine
+          connection={connection}
+          intervalMs={snapshot.intervalMs}
+          mode={mode}
+          notice={notice}
+        />
+      </VStack>
+    </>
   )
 }

@@ -38,13 +38,18 @@ class MainActivity : TauriActivity() {
 
   private fun navigateByIntent(intent: Intent?) {
     val screen = intent?.getStringExtra(EXTRA_SCREEN) ?: return
-    val target =
-      when (screen) {
-        "settings" -> "settings/index.html"
-        else -> return
-      }
+    if (screen != "settings") return
     intent.removeExtra(EXTRA_SCREEN)
-    (webView as? RustWebView)?.loadUrlMainThread(target) ?: return
+    // URL을 바꾸지 않고 프론트에 알린다. floating 컨트롤러가 설정 오버레이를
+    // 겹쳐 렌더하고, 닫으면 스캔 상태가 그대로 유지된다.
+    (webView as? RustWebView)?.let { wv ->
+      wv.post {
+        wv.evaluateJavascript(
+          "window.dispatchEvent(new CustomEvent('hanbeon://open-settings'))",
+          null,
+        )
+      }
+    }
   }
 
   companion object {

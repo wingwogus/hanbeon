@@ -28,7 +28,14 @@ import {
  * 설정을 바꾸는 것보다 비싼 일이다. 대신 바꾸는 즉시 반영·저장하고,
  * 되돌릴 수단으로 '기본값으로 되돌리기'를 둔다.
  */
-export function SettingsForm({ initial }: { initial: Profile }) {
+export function SettingsForm({
+  initial,
+  onClose,
+}: {
+  initial: Profile
+  /** Android처럼 창을 닫는 대신 화면을 걷을 때 쓴다. 없으면 기존 닫기 동작. */
+  onClose?: () => void
+}) {
   const [draft, setDraft] = useState<Profile>(initial)
   const [warning, setWarning] = useState<string | null>(null)
   const [adjustment, setAdjustment] = useState<IntervalEvent | null>(null)
@@ -88,6 +95,10 @@ export function SettingsForm({ initial }: { initial: Profile }) {
           color="$base"
           cursor="pointer"
           onClick={() => {
+            if (onClose) {
+              onClose()
+              return
+            }
             closeSettings().catch(() => {})
           }}
           px="24px"
