@@ -89,6 +89,15 @@ export default function FloatingPage() {
     let cancelled = false
     if (/Android/i.test(navigator.userAgent)) {
       invoke('start_overlay_service').catch(() => {})
+      // 처음 키면 설정을 먼지 부른다. 오버레이 컨트롤러만 떠우면 보토자가
+      // 주사 속도나 스위숨를 정할 수단이 없다. 온보드를 마치기 전이면 더놝 그런다.
+      getProfile()
+        .then((profile) => {
+          if (cancelled) return
+          setSettingsProfile(profile)
+          setSettingsOpen(true)
+        })
+        .catch(() => {})
     }
     invoke<unknown>('transport_status_snapshot')
       .then((payload) => {
