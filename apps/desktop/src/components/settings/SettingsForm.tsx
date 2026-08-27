@@ -9,6 +9,7 @@ import { Range } from '@/components/settings/Range'
 import { Section } from '@/components/settings/Section'
 import { SwitchTester } from '@/components/settings/SwitchTester'
 import { Toggle } from '@/components/settings/Toggle'
+import { TrustedSwitchSetup } from '@/components/settings/TrustedSwitchSetup'
 import { formatSeconds } from '@/lib/format'
 import {
   closeSettings,
@@ -266,6 +267,8 @@ export function SettingsForm({
         />
         <SwitchTester longPressMs={draft.longPressMs} />
       </Section>
+
+      <TrustedSwitchSetup />
 
       <Section
         description="선택 직후 3초 안에 다시 누르면 이 동작을 보냅니다. 대상 프로그램이 이 단축키를 지원할 때만 실제로 되돌아갑니다."

@@ -5,7 +5,9 @@ import { Center, Text } from '@devup-ui/react'
 import type { ScanMode } from '@/lib/actions'
 import {
   type ArduinoConnection,
+  connectionAnnouncement,
   connectionCopy,
+  connectionMark,
   connectionSentinel,
   INITIAL_CONNECTION,
 } from '@/lib/arduino'
@@ -21,6 +23,23 @@ interface StatusLineProps {
   notice: string | null
 }
 
+const attentionColor = (connection: ArduinoConnection) => {
+  switch (connection.state) {
+    case 'error':
+      return '$error'
+    case 'reconnecting':
+    case 'permission':
+    case 'action-required':
+    case 'suspended':
+      return '$warning'
+    case 'waiting':
+    case 'connecting':
+      return '$info'
+    default:
+      return null
+  }
+}
+
 /**
  * 컨트롤러 맨 아래 한 줄.
  *
@@ -34,6 +53,8 @@ interface StatusLineProps {
  * 스위치 연결 상태도 같은 한 줄에 얹는다. 새 줄을 늘리면 칸이 움직이고,
  * 연결 안내는 속도보다 먼저 읽혀야 한다. 이 줄은 누를 곳이 아니라서
  * 대상 앱의 포커스를 뺏지 않는다.
+ *
+ * 상태 단서는 색만이 아니라 `data-mark`와 굵기로도 읽힌다(원칙 6).
  */
 export function StatusLine({
   connection = INITIAL_CONNECTION,
@@ -41,22 +62,28 @@ export function StatusLine({
   mode,
   notice,
 }: StatusLineProps) {
-  const paused = mode === 'paused'
   const connectionNotice = connectionCopy(connection)
-  const disconnected =
-    connection.state === 'waiting' ||
-    connection.state === 'connecting' ||
-    connection.state === 'reconnecting' ||
-    connection.state === 'error'
+  // Transport loss also pauses the scanner. That halt is not a user pause,
+  // so missing-switch copy outranks the long-press pause line.
+  const userPaused = mode === 'paused' && !connectionNotice
+  const tone = userPaused
+    ? '$warning'
+    : (attentionColor(connection) ?? (notice ? '$primary' : '$caption'))
+  const mark = connectionMark(connection)
+  const announcement = userPaused
+    ? '일시정지 — 길게 눌러 다시 시작'
+    : connectionAnnouncement(connection)
 
-  // 정지 > 연결 > 최근 조정 > 현재 속도. 멈춰 있다는 사실과 스위치가
-  // 빠졌다는 사실이 속도 안내보다 먼저다.
-  const message = paused
+  // 연결 이상 > 사용자 정지 > 최근 조정 > 현재 속도. 스위치가 빠진
+  // 멈춤을 일시정지로 읽히게 두면 길게 눌러 다시 시작하려 한다.
+  const message = userPaused
     ? '일시정지 — 길게 눌러 다시 시작'
     : (connectionNotice ?? notice ?? `${formatSeconds(intervalMs)}마다`)
 
   return (
     <Center
+      aria-label={announcement}
+      data-mark={mark}
       data-state={connectionSentinel(connection)}
       flexShrink={0}
       h="22px"
@@ -64,21 +91,9 @@ export function StatusLine({
       w="100%"
     >
       <Text
-        color={
-          paused
-            ? '$warning'
-            : connection.state === 'error'
-              ? '$error'
-              : connection.state === 'reconnecting'
-                ? '$warning'
-                : disconnected
-                  ? '$info'
-                  : notice
-                    ? '$primary'
-                    : '$caption'
-        }
+        color={tone}
         // 평소 안내와 달라졌다는 것을 색만으로 알리지 않는다(원칙 6).
-        fontWeight={paused || notice || connectionNotice ? 700 : 400}
+        fontWeight={userPaused || notice || connectionNotice ? 700 : 400}
         overflow="hidden"
         textOverflow="ellipsis"
         typography="caption"

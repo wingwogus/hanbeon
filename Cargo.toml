@@ -1,3 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["apps/desktop/src-tauri", "crates/hanbeon-core", "crates/hanbeon-jni"]
+
+# Full debug info produced a 163MB libhanbeon_lib.so and a 333MB Android debug
+# APK, which repeatedly failed to install over wireless ADB. Line tables keep
+# crash frames and panic locations readable at a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"

@@ -6,6 +6,7 @@ import { useState } from 'react'
 import { Range } from '@/components/settings/Range'
 import { Section } from '@/components/settings/Section'
 import { SwitchTester } from '@/components/settings/SwitchTester'
+import { TrustedSwitchSetup } from '@/components/settings/TrustedSwitchSetup'
 import { formatSeconds } from '@/lib/format'
 import { type Profile, saveProfile } from '@/lib/profile'
 
@@ -74,6 +75,8 @@ export function Onboarding({
           <SwitchTester longPressMs={draft.longPressMs} />
         </Section>
       )}
+
+      {step === 0 && <TrustedSwitchSetup />}
 
       {step === 1 && (
         <Section

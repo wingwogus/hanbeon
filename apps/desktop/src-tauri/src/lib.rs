@@ -351,6 +351,18 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
         #[cfg(target_os = "android")]
         android_bridge::start_overlay_service,
+        #[cfg(target_os = "android")]
+        android_bridge::transport_status_snapshot,
+        #[cfg(target_os = "android")]
+        android_bridge::ble_setup_snapshot,
+        #[cfg(target_os = "android")]
+        android_bridge::ble_setup_request_permission,
+        #[cfg(target_os = "android")]
+        android_bridge::ble_setup_scan,
+        #[cfg(target_os = "android")]
+        android_bridge::ble_setup_select,
+        #[cfg(target_os = "android")]
+        android_bridge::ble_setup_revoke,
             scan_snapshot,
             get_profile,
             save_profile,

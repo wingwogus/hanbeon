@@ -126,6 +126,19 @@ pub fn rebind(app: &AppHandle, old: Code, new: Code) -> Result<(), String> {
     Ok(())
 }
 
+/// Drop a held press without judging it.
+///
+/// Transport loss uses this instead of synthesizing a release. A later stale
+/// release then produces no gesture. The Android arbiter (Todo 6) is the first
+/// production caller; desktop HID/serial still share the detector helper.
+#[cfg(feature = "desktop")]
+#[allow(dead_code)]
+pub fn cancel_press(detector: &SharedDetector) {
+    if let Ok(mut detector) = detector.lock() {
+        detector.cancel();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +225,21 @@ mod tests {
         assert_eq!(DEFAULT_SWITCH_CODE, Code::F13);
         assert_eq!(parse_code("F13"), Some(Code::F13));
         assert_eq!(parse_code("KeyA"), Some(Code::KeyA));
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn transport_loss_cancel_press_drops_held_input_without_judgement() {
+        let detector: SharedDetector = std::sync::Arc::new(std::sync::Mutex::new(detector()));
+        let t0 = Instant::now();
+        detector.lock().expect("detector").on_press(t0);
+        cancel_press(&detector);
+        assert_eq!(
+            detector
+                .lock()
+                .expect("detector")
+                .on_release(t0 + Duration::from_millis(200)),
+            None
+        );
     }
 }

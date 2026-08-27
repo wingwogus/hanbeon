@@ -18,6 +18,7 @@
 //! 놓은 뒤에 실행할 수 있다.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -169,6 +170,15 @@ struct State {
     adapter: Adapter,
     limits: Limits,
     adaptation_active: bool,
+    /// Why scanning is halted. `Paused` is shared by a long-press stop and a
+    /// missing switch; recovery may resume only a transport halt.
+    pause_reason: Option<PauseReason>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseReason {
+    User,
+    Transport,
 }
 
 impl State {
@@ -198,6 +208,7 @@ impl State {
                 max_ms: profile.max_interval_ms,
             },
             adaptation_active: profile.adaptation_active(),
+            pause_reason: None,
         }
     }
 
@@ -240,6 +251,7 @@ impl State {
         self.restart_next = false;
         self.steps = 0;
         self.entered_at = now;
+        self.pause_reason = None;
         self.enter(Mode::Scanning, self.interval, now);
     }
 
@@ -437,28 +449,43 @@ impl State {
         }
     }
 
-    /// 정지 상태를 못 박는다. 바뀌었으면 참.
-    ///
-    /// 길게 누름과 달리 오가지 않는다. 스위치가 뽑힌 것처럼 바깥 사정으로
-    /// 정지시킬 때 쓴다.
-    fn set_paused(&mut self, paused: bool, now: Instant) -> bool {
-        let next = if paused { Mode::Paused } else { Mode::Scanning };
-        if self.mode == next {
+    /// Halt because the active switch disappeared. Drops dwell/confirm deadlines
+    /// so a later resume cannot fire a stale selection window.
+    fn suspend_transport(&mut self, now: Instant) -> bool {
+        if self.pause_reason == Some(PauseReason::User) {
             return false;
         }
-        self.enter(next, self.interval, now);
+        if self.mode == Mode::Paused && self.pause_reason == Some(PauseReason::Transport) {
+            return false;
+        }
+        self.pause_reason = Some(PauseReason::Transport);
+        if self.mode == Mode::Paused {
+            return false;
+        }
+        self.enter(Mode::Paused, self.interval, now);
+        true
+    }
+
+    /// Resume only a transport halt, at the same cursor with a fresh interval.
+    fn resume_transport(&mut self, now: Instant) -> bool {
+        if self.pause_reason != Some(PauseReason::Transport) {
+            return false;
+        }
+        self.pause_reason = None;
+        self.enter(Mode::Scanning, self.interval, now);
         true
     }
 
     /// 길게 누름. 정지와 해제를 오간다.
     fn toggle_pause(&mut self, now: Instant) {
         self.last_input_at = now;
-        let next = if self.mode == Mode::Paused {
-            Mode::Scanning
+        if self.mode == Mode::Paused {
+            self.pause_reason = None;
+            self.enter(Mode::Scanning, self.interval, now);
         } else {
-            Mode::Paused
-        };
-        self.enter(next, self.interval, now);
+            self.pause_reason = Some(PauseReason::User);
+            self.enter(Mode::Paused, self.interval, now);
+        }
     }
 }
 
@@ -491,6 +518,7 @@ pub struct Scanner {
     host: Arc<dyn Host>,
     profile: Arc<Mutex<Profile>>,
     journal: Journal,
+    running: Arc<AtomicBool>,
 }
 
 impl Scanner {
@@ -505,6 +533,7 @@ impl Scanner {
             host,
             profile,
             journal,
+            running: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -636,18 +665,26 @@ impl Scanner {
         self.host.publish(Notice::Preset { message });
     }
 
-    /// 스위치가 뽑혔다. 스캔을 정지로 내린다(PRD F10).
+    /// 스위치가 뽑혔다. 눌림은 판정하지 않고 스캔을 정지로 내린다(PRD F10).
     ///
     /// 커서만 계속 도는 상태로 두면 사용자는 눌러도 아무 일이 없는 이유를 알 수
-    /// 없다. 다시 꽂아도 저절로 재개하지는 않는다. 재개는 사용자가 길게 눌러서
-    /// 한다 — 사람이 정한 것을 코드가 되돌리지 않는다(원칙 1).
+    /// 없다. 사용자가 길게 눌러 멈춘 정지는 건드리지 않는다. 전송이 돌아와
+    /// `resume_transport`를 부르면 같은 커서에서 순환만 재개한다.
     pub fn switch_lost(&self) {
+        self.suspend_transport();
+    }
+
+    /// Halt scanning because the active input source disappeared.
+    ///
+    /// Dwell/confirm deadlines are dropped so recovery cannot fire a stale
+    /// selection. An explicit long-press pause is left untouched.
+    pub fn suspend_transport(&self) {
         let snapshot = {
             let Ok(mut state) = self.state.lock() else {
                 return;
             };
             let now = Instant::now();
-            if !state.set_paused(true, now) {
+            if !state.suspend_transport(now) {
                 return;
             }
             state.snapshot(now)
@@ -657,6 +694,25 @@ impl Scanner {
             eprintln!("[scan] 스위치 연결이 끊겨 정지합니다");
         }
         self.host.cue(Cue::Pause);
+        self.host.publish(Notice::State(Box::new(snapshot)));
+    }
+
+    /// Resume only a transport-caused halt at the same cursor with a full interval.
+    pub fn resume_transport(&self) {
+        let snapshot = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            let now = Instant::now();
+            if !state.resume_transport(now) {
+                return;
+            }
+            state.snapshot(now)
+        };
+
+        if log_enabled() {
+            eprintln!("[scan] 스위치 연결이 돌아와 순환을 재개합니다");
+        }
         self.host.publish(Notice::State(Box::new(snapshot)));
     }
 
@@ -670,13 +726,20 @@ impl Scanner {
     /// 모드마다 마감이 다르므로 고정 간격으로 자는 대신 짧은 주기로 마감을
     /// 확인한다. 입력으로 마감이 바뀌어도 한 틱 안에 반영된다.
     pub fn start(&self) {
+        if self.running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let running = Arc::clone(&self.running);
         let state = Arc::clone(&self.state);
         let host = Arc::clone(&self.host);
         let journal = self.journal.clone();
 
         thread::spawn(move || {
-            loop {
+            while running.load(Ordering::Acquire) {
                 thread::sleep(TICK);
+                if !running.load(Ordering::Acquire) {
+                    return;
+                }
 
                 let changed = {
                     let Ok(mut state) = state.lock() else {
@@ -707,6 +770,11 @@ impl Scanner {
                 }
             }
         });
+    }
+
+    /// Stop the timer worker so a platform service teardown releases the scanner.
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::Release);
     }
 
     /// 판정된 제스처를 상태기계에 넣는다.
@@ -1404,5 +1472,64 @@ mod tests {
         state.apply_profile(&profile, now);
         assert_eq!(state.interval, Duration::from_millis(2500));
         assert_eq!(state.deadline, now + Duration::from_millis(2500));
+    }
+
+    #[test]
+    fn transport_loss_while_released_suspends_and_resumes_same_cursor() {
+        let (mut state, mut now) = state();
+        now += INTERVAL;
+        state.advance(now);
+        let cursor = state.cursor();
+        let remaining_before = state
+            .snapshot(now + Duration::from_millis(400))
+            .remaining_ms;
+
+        assert!(state.suspend_transport(now + Duration::from_millis(400)));
+        assert_eq!(state.mode, Mode::Paused);
+        assert_eq!(state.cursor(), cursor);
+        assert!(state.advance(now + INTERVAL * 3).is_none());
+
+        let resumed_at = now + INTERVAL * 3;
+        assert!(state.resume_transport(resumed_at));
+        assert_eq!(state.mode, Mode::Scanning);
+        assert_eq!(state.cursor(), cursor);
+        assert_eq!(state.snapshot(resumed_at).remaining_ms, 1000);
+        assert!(remaining_before < 1000);
+        assert!(
+            state
+                .advance(resumed_at + INTERVAL - Duration::from_millis(1))
+                .is_none()
+        );
+        assert!(state.advance(resumed_at + INTERVAL).is_some());
+    }
+
+    #[test]
+    fn transport_loss_does_not_resume_manual_pause() {
+        let (mut state, now) = state();
+        state.toggle_pause(now);
+        assert_eq!(state.mode, Mode::Paused);
+
+        assert!(!state.suspend_transport(now + Duration::from_millis(10)));
+        assert!(!state.resume_transport(now + Duration::from_millis(20)));
+        assert_eq!(state.mode, Mode::Paused);
+    }
+
+    #[test]
+    fn transport_loss_drops_stale_dwell_and_confirm_deadlines() {
+        let (mut state, now) = state();
+        let now = move_to(&mut state, Action::Enter, now);
+        state.select(now);
+        assert_eq!(state.mode, Mode::Confirm);
+        let cursor = state.cursor();
+
+        assert!(state.suspend_transport(now + Duration::from_millis(10)));
+        assert_eq!(state.mode, Mode::Paused);
+
+        let later = now + CONFIRM_WINDOW + Duration::from_millis(50);
+        assert!(state.advance(later).is_none());
+        assert!(state.resume_transport(later));
+        assert_eq!(state.mode, Mode::Scanning);
+        assert_eq!(state.cursor(), cursor);
+        assert_eq!(state.snapshot(later).remaining_ms, 1000);
     }
 }

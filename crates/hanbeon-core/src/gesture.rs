@@ -61,6 +61,15 @@ impl GestureDetector {
         self.long_press = long_press;
     }
 
+    /// Drop a held press without judging it.
+    ///
+    /// Transport loss uses this so a disconnected switch cannot emit a short/long
+    /// action, and a later stale release cannot unpause the scanner.
+    pub fn cancel(&mut self) {
+        self.pressed_at = None;
+        self.released_at = None;
+    }
+
     pub fn on_press(&mut self, now: Instant) {
         // 키 리피트로 눌림이 반복 전달돼도 최초 시각을 유지한다.
         if self.pressed_at.is_some() {
@@ -177,5 +186,29 @@ mod tests {
     fn 누름_없는_뗌은_아무것도_아니다() {
         let mut d = detector();
         assert_eq!(d.on_release(Instant::now()), None);
+    }
+
+    #[test]
+    fn transport_loss_cancels_held_press_without_judgement() {
+        let mut d = detector();
+        let t0 = Instant::now();
+        d.on_press(t0);
+        d.cancel();
+        assert_eq!(d.on_release(t0 + Duration::from_millis(200)), None);
+        assert_eq!(d.on_release(t0 + Duration::from_millis(800)), None);
+    }
+
+    #[test]
+    fn transport_loss_cancel_clears_debounce_for_next_press() {
+        let mut d = detector();
+        let t0 = Instant::now();
+        d.on_press(t0);
+        d.cancel();
+        d.on_press(t0 + Duration::from_millis(10));
+        assert_eq!(
+            d.on_release(t0 + Duration::from_millis(210))
+                .map(|j| j.gesture),
+            Some(Gesture::Short)
+        );
     }
 }

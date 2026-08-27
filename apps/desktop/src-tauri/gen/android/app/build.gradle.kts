@@ -30,10 +30,11 @@ android {
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
-            packaging {                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
-                jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
-                jniLibs.keepDebugSymbols.add("*/x86/*.so")
-                jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
+            // Debug symbols made the universal APK 333MB, which repeatedly broke
+            // installs over wireless ADB. Stripping them keeps the APK ~13MB;
+            // native crash frames are still symbolized from target/ locally.
+            packaging {
+                jniLibs.keepDebugSymbols.clear()
             }
         }
         getByName("release") {
@@ -56,6 +57,51 @@ android {
 rust {
     rootDirRel = "../../../"
 }
+
+// The Tauri rust plugin builds src-tauri (libhanbeon_lib.so) only. crates/hanbeon-jni
+// is a separate crate that exports every Java_kr_devfive_hanbeon_Core_native* symbol
+// Core.kt declares, and nothing rebuilt it: a stale libhanbeon_jni.so shipped with 5
+// of 9 symbols and the app died at startup with UnsatisfiedLinkError. Build it here so
+// a missing symbol can never reach a device again.
+val jniAbis = mapOf(
+    "arm64-v8a" to "aarch64-linux-android",
+    "armeabi-v7a" to "armv7-linux-androideabi",
+    "x86" to "i686-linux-android",
+    "x86_64" to "x86_64-linux-android",
+)
+
+val buildHanbeonJni by tasks.registering {
+    description = "Builds crates/hanbeon-jni for each Android ABI into app/src/main/jniLibs."
+    val workspaceRoot = file("../../../../../../")
+    val jniLibsDir = file("src/main/jniLibs")
+    inputs.dir(File(workspaceRoot, "crates/hanbeon-jni/src"))
+    inputs.dir(File(workspaceRoot, "crates/hanbeon-core/src"))
+    outputs.dir(jniLibsDir)
+
+    doLast {
+        // Only ABIs already present are refreshed, so a single-target debug build
+        // stays fast; a fresh ABI directory is created on demand for release builds.
+        val requested = jniAbis.filterKeys { abi ->
+            File(jniLibsDir, abi).exists() || project.hasProperty("hanbeonAllAbis")
+        }
+        require(requested.isNotEmpty()) { "no target ABI found under ${jniLibsDir}" }
+
+        requested.forEach { (abi, target) ->
+            providers.exec {
+                workingDir = workspaceRoot
+                commandLine("cargo", "build", "-p", "hanbeon-jni", "--release", "--target", target)
+            }.result.get().assertNormalExitValue()
+
+            val built = File(workspaceRoot, "target/$target/release/libhanbeon_jni.so")
+            require(built.isFile) { "hanbeon-jni did not produce $built" }
+            val destDir = File(jniLibsDir, abi).apply { mkdirs() }
+            built.copyTo(File(destDir, "libhanbeon_jni.so"), overwrite = true)
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildHanbeonJni) }
 
 dependencies {
     implementation("androidx.webkit:webkit:1.14.0")

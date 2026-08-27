@@ -23,6 +23,7 @@ use jni::{JNIEnv, JavaVM};
 
 /// 살아 있는 스캐너. 안드로이드는 앱 하나에 컨트롤러 하나다.
 static RUNNING: OnceLock<Mutex<Option<Running>>> = OnceLock::new();
+static CALLBACKS: OnceLock<Mutex<Option<GlobalRef>>> = OnceLock::new();
 
 struct Running {
     scanner: Scanner,
@@ -33,10 +34,13 @@ fn running() -> &'static Mutex<Option<Running>> {
     RUNNING.get_or_init(|| Mutex::new(None))
 }
 
+fn callbacks() -> &'static Mutex<Option<GlobalRef>> {
+    CALLBACKS.get_or_init(|| Mutex::new(None))
+}
+
 /// 코어가 플랫폼에 요구하는 것을 Kotlin에게 넘긴다.
 struct AndroidHost {
     vm: JavaVM,
-    callbacks: GlobalRef,
 }
 
 impl AndroidHost {
@@ -47,9 +51,14 @@ impl AndroidHost {
     ///
     /// 돌려주는 값은 참/거짓뿐이다. 객체를 넘기면 수명이 얽히고, 어차피 코어가
     /// 알아야 하는 것은 '됐는가'뿐이다.
+    fn current_callbacks() -> Option<GlobalRef> {
+        callbacks().lock().ok()?.as_ref().cloned()
+    }
+
     fn call(&self, name: &str, sig: &str, args: &[JValue]) -> Option<bool> {
         let mut env = self.vm.attach_current_thread().ok()?;
-        let result = env.call_method(&self.callbacks, name, sig, args);
+        let callbacks = Self::current_callbacks()?;
+        let result = env.call_method(&callbacks, name, sig, args);
 
         // 예외를 지우지 않으면 그 뒤의 모든 JNI 호출이 실패한다.
         if env.exception_check().unwrap_or(false) {
@@ -75,8 +84,11 @@ impl AndroidHost {
         let Ok(text) = env.new_string(json) else {
             return;
         };
+        let Some(callbacks) = Self::current_callbacks() else {
+            return;
+        };
         let _ = env.call_method(
-            &self.callbacks,
+            &callbacks,
             name,
             "(Ljava/lang/String;)V",
             &[JValue::Object(&JObject::from(text))],
@@ -227,16 +239,29 @@ fn read_string(env: &mut JNIEnv, value: &JString) -> String {
 pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeStart(
     mut env: JNIEnv,
     _class: JClass,
-    callbacks: JObject,
+    host_callbacks: JObject,
     profile_json: JString,
     log_dir: JString,
 ) -> jboolean {
     let Ok(vm) = env.get_java_vm() else {
         return 0;
     };
-    let Ok(callbacks) = env.new_global_ref(callbacks) else {
+    let Ok(callback_ref) = env.new_global_ref(host_callbacks) else {
         return 0;
     };
+
+    if let Ok(mut slot) = callbacks().lock() {
+        *slot = Some(callback_ref);
+    } else {
+        return 0;
+    }
+
+    let Ok(mut slot) = running().lock() else {
+        return 0;
+    };
+    if slot.is_some() {
+        return 1;
+    }
 
     let raw = read_string(&mut env, &profile_json);
     // 프로필을 못 읽어도 뜬다. 설정을 읽지 못했다고 앱이 안 뜨면 사용자는
@@ -251,19 +276,32 @@ pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeStart(
         Journal::off()
     };
 
-    let host = Arc::new(AndroidHost { vm, callbacks });
+    let host = Arc::new(AndroidHost { vm });
     let long_press = std::time::Duration::from_millis(profile.long_press_ms);
     let detector: SharedDetector = Arc::new(Mutex::new(GestureDetector::new(long_press)));
     let shared = Arc::new(Mutex::new(profile));
 
     let scanner = Scanner::new(Arc::clone(&shared), host, journal);
     scanner.start();
-
-    let Ok(mut slot) = running().lock() else {
-        return 0;
-    };
     *slot = Some(Running { scanner, detector });
     1
+}
+
+/// 서비스가 내려간다. 타이머와 콜백을 버려 다음 서비스 인스턴스가 새 코어를
+/// 시작할 수 있게 한다.
+///
+/// # Safety
+/// JNI가 부른다.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeStop(_env: JNIEnv, _class: JClass) {
+    if let Ok(mut slot) = running().lock()
+        && let Some(state) = slot.take()
+    {
+        state.scanner.stop();
+    }
+    if let Ok(mut slot) = callbacks().lock() {
+        *slot = None;
+    }
 }
 
 /// 스위치가 눌렸다.
@@ -280,6 +318,25 @@ pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativePressed(_env: JNIEnv
     };
     if let Ok(mut detector) = state.detector.lock() {
         detector.on_press(Instant::now());
+    }
+}
+
+/// Drop a held press without judging it.
+///
+/// # Safety
+/// JNI가 부른다.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeCancelPress(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    let Ok(slot) = running().lock() else {
+        return;
+    };
+    if let Some(state) = slot.as_ref()
+        && let Ok(mut detector) = state.detector.lock()
+    {
+        detector.cancel();
     }
 }
 
@@ -337,10 +394,47 @@ pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeSwitchLost(
     _env: JNIEnv,
     _class: JClass,
 ) {
+    native_cancel_and_suspend();
+}
+
+/// 활성 입력원이 사라졌다. 눌림은 판정하지 않고 스캔만 멈춘다.
+///
+/// # Safety
+/// JNI가 부른다.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeSuspendTransport(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    native_cancel_and_suspend();
+}
+
+/// 활성 입력원이 돌아왔다. 전송 정지만 같은 커서에서 재개한다.
+///
+/// # Safety
+/// JNI가 부른다.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_kr_devfive_hanbeon_Core_nativeResumeTransport(
+    _env: JNIEnv,
+    _class: JClass,
+) {
     let Ok(slot) = running().lock() else {
         return;
     };
     if let Some(state) = slot.as_ref() {
-        state.scanner.switch_lost();
+        state.scanner.resume_transport();
     }
+}
+
+fn native_cancel_and_suspend() {
+    let Ok(slot) = running().lock() else {
+        return;
+    };
+    let Some(state) = slot.as_ref() else {
+        return;
+    };
+    if let Ok(mut detector) = state.detector.lock() {
+        detector.cancel();
+    }
+    state.scanner.suspend_transport();
 }
