@@ -65,7 +65,13 @@ export function StatusLine({
   const connectionNotice = connectionCopy(connection)
   // Transport loss also pauses the scanner. That halt is not a user pause,
   // so missing-switch copy outranks the long-press pause line.
-  const userPaused = mode === 'paused' && !connectionNotice
+  //
+  // reconnecting deliberately has no connectionCopy so the overlay line does
+  // not shift while the cursor runs, but it is still a transport state. Reading
+  // it as a user pause would tell the caregiver to long-press to resume while
+  // the switch is simply being found again.
+  const searching = connection.state === 'reconnecting'
+  const userPaused = mode === 'paused' && !connectionNotice && !searching
   const tone = userPaused
     ? '$warning'
     : (attentionColor(connection) ?? (notice ? '$primary' : '$caption'))

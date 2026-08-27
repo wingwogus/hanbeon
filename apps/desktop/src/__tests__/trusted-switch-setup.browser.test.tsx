@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { render } from 'bun-test-env-dom'
 import { act, type ReactElement } from 'react'
 
@@ -13,6 +13,7 @@ import {
 import { type Profile } from '@/lib/profile'
 
 import { tauriEventListeners as listeners } from './tauri-event.mock'
+import { registerInvokeHandler } from './tauri-invoke.mock'
 
 const originalSetTimeout = globalThis.setTimeout
 
@@ -103,40 +104,37 @@ let snapshot: BleSetupSnapshot = { ...DENIED }
 let invokeCalls: Array<{ command: string; args?: unknown }> = []
 let persistFile: BleSetupSnapshot | null = null
 
-mock.module('@tauri-apps/api/core', () => ({
-  SERIALIZE_TO_IPC_FN: '__TAURI_TO_IPC_KEY__',
-  invoke: (command: string, args?: unknown) => {
-    invokeCalls.push({ command, args })
-    if (command === 'get_profile') return Promise.resolve(PROFILE)
-    if (command === 'save_profile') {
-      return Promise.resolve({ profile: PROFILE, warning: null })
-    }
-    if (command === 'log_directory') return Promise.resolve('/tmp/hanbeon-logs')
-    if (command === 'close_settings') return Promise.resolve()
-    if (command === 'ble_setup_snapshot') {
-      return new Promise((resolve) => {
-        queueMicrotask(() => resolve(persistFile ?? snapshot))
-      })
-    }
-    if (command === 'ble_setup_request_permission') {
-      return Promise.resolve(persistFile ?? snapshot)
-    }
-    if (command === 'ble_setup_scan') {
-      return Promise.resolve(persistFile ?? snapshot)
-    }
-    if (command === 'ble_setup_select') {
-      persistFile = { ...SELECTED }
-      snapshot = persistFile
-      return Promise.resolve(persistFile)
-    }
-    if (command === 'ble_setup_revoke') {
-      persistFile = { ...ABSENT, candidates: [] }
-      snapshot = persistFile
-      return Promise.resolve(persistFile)
-    }
-    return Promise.resolve(null)
-  },
-}))
+registerInvokeHandler((command: string, args?: unknown) => {
+  invokeCalls.push({ command, args })
+  if (command === 'get_profile') return Promise.resolve(PROFILE)
+  if (command === 'save_profile') {
+    return Promise.resolve({ profile: PROFILE, warning: null })
+  }
+  if (command === 'log_directory') return Promise.resolve('/tmp/hanbeon-logs')
+  if (command === 'close_settings') return Promise.resolve()
+  if (command === 'ble_setup_snapshot') {
+    return new Promise((resolve) => {
+      queueMicrotask(() => resolve(persistFile ?? snapshot))
+    })
+  }
+  if (command === 'ble_setup_request_permission') {
+    return Promise.resolve(persistFile ?? snapshot)
+  }
+  if (command === 'ble_setup_scan') {
+    return Promise.resolve(persistFile ?? snapshot)
+  }
+  if (command === 'ble_setup_select') {
+    persistFile = { ...SELECTED }
+    snapshot = persistFile
+    return Promise.resolve(persistFile)
+  }
+  if (command === 'ble_setup_revoke') {
+    persistFile = { ...ABSENT, candidates: [] }
+    snapshot = persistFile
+    return Promise.resolve(persistFile)
+  }
+  return undefined
+})
 
 function emit(event: string, payload: unknown) {
   const listener = listeners.get(event)
@@ -190,6 +188,7 @@ describe('BLE setup contract', () => {
 
 describe('Trusted switch setup UI', () => {
   beforeEach(() => {
+    document.body.innerHTML = ''
     listeners.clear()
     invokeCalls = []
     persistFile = null
@@ -201,6 +200,9 @@ describe('Trusted switch setup UI', () => {
   })
 
   afterEach(() => {
+    // Leftover renders stay in document.body and leak into other suites'
+    // container reads, so clear it here.
+    document.body.innerHTML = ''
     globalThis.setTimeout = originalSetTimeout
     document.body.innerHTML = ''
   })
@@ -438,19 +440,18 @@ describe('Settings and onboarding expose caregiver BLE setup', () => {
       ...ABSENT,
       candidates: [{ token: 'ble-1', label: 'HanBeon XIAO' }],
     }
-    const { Onboarding } = await import('@/components/settings/Onboarding')
-    const view = render(
-      <Onboarding
-        initial={{ ...PROFILE, onboarded: false }}
-        onDone={() => {}}
-      />,
-    )
+    // The wireless pick lives on the switch-check step of onboarding. Render
+    // the component itself instead of walking onboarding: the step order is
+    // owned by the firmware onboarding suite, so asserting it here would break
+    // this test whenever that flow is renumbered.
+    const { TrustedSwitchSetup } =
+      await import('@/components/settings/TrustedSwitchSetup')
+    const view = render(<TrustedSwitchSetup />)
 
     await act(async () => {
       emit(BLE_SETUP_EVENT, snapshot)
     })
 
-    expect(textOf(view.container)).toInclude('스위치를 눌러 보세요')
     expect(textOf(view.container)).toInclude('HanBeon XIAO')
     expect(textOf(view.container)).toInclude('USB')
   })

@@ -23,9 +23,13 @@ tauri-plugin-global-shortcut = { version = "2.3.2", optional = true }
 enigo = { version = "0.6.1", optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
-serialport = { version = "4.9.0", optional = true }
+serialport = "4.9.0"
+# reqwest는 app_registry(앱 프로필), ureq는 registry(보드 펌웨어)에서 쓴다.
+# 두 클라이언트의 역할이 다르므로 지금은 병행한다.
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+ureq = "3.4.0"
 sha2 = "0.11.0"
+unicode-normalization = "0.1.25"
 
 # 이후 단계에서 붙일 crate. 버전은 반드시 `cargo add`로 확정한다.
 #   cargo add tauri-plugin-store             # 사용자 프로필 영속화 (M3)
@@ -36,7 +40,7 @@ default = []
 # 데스크톱 전용 기능: 트레이, 전역 단축키, 키 주입, 소리, 시리얼.
 # 데스크톱 빌드는 --features desktop으로 켠다. 안드로이드(tauri android)는
 # 기본 기능 없이 빌드된다.
-desktop = ["dep:tauri-plugin-global-shortcut", "dep:enigo", "dep:rodio", "dep:serialport", "tauri/tray-icon"]
+desktop = ["dep:tauri-plugin-global-shortcut", "dep:enigo", "dep:rodio", "tauri/tray-icon"]
 
 [target."cfg(target_os = \"macos\")".dependencies]
 accessibility = "0.2.0"
