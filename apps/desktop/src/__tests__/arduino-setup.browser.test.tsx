@@ -9,6 +9,7 @@ import {
   FIRMWARE_EVENT,
   type FirmwareState,
 } from '../lib/firmware'
+import { profileMock } from './profile.mock'
 
 type Listener = (event: { payload: unknown }) => void
 
@@ -164,13 +165,10 @@ mock.module('@/lib/format', () => ({
   formatSeconds: (ms: number) => `${(ms / 1000).toFixed(1)}초`,
 }))
 
-mock.module('@/lib/profile', () => ({
-  saveProfile: (profile: unknown) => {
-    commands.push({ name: 'save_profile', args: { next: profile } })
-    return Promise.reject(new Error('save unavailable'))
-  },
-  closeSettings: () => Promise.resolve(),
-}))
+profileMock.saveProfile = (profile: unknown) => {
+  commands.push({ name: 'save_profile', args: { next: profile } })
+  return Promise.reject(new Error('save unavailable'))
+}
 
 function emit(event: string, payload: unknown) {
   const listener = listeners.get(event)

@@ -15,6 +15,7 @@ import {
   type TransportStatusSnapshot,
 } from '@/lib/arduino'
 
+import { profileMock } from './profile.mock'
 import {
   tauriEventListeners as listeners,
   tauriEventMockState,
@@ -124,27 +125,6 @@ mock.module('@/components/DragHandle', () => ({
   DragHandle: () => <div aria-hidden="true" />,
 }))
 
-// NOTE: Bun's module mocks are process-global. This stub keeps the page-boundary
-// tests focused on overlay startup and scan controls, but it also replaces the
-// component for the suite that owns the onboarding step order
-// (arduino-setup.browser.test.tsx). Those two onboarding tests therefore fail
-// when the whole suite runs together. Fixing it properly means giving the page
-// an injectable onboarding slot rather than mocking the module, which is a
-// production change and is tracked separately.
-mock.module('@/components/settings/Onboarding', () => ({
-  Onboarding: ({ onDone }: { onDone?: (profile: unknown) => void }) => {
-    useEffect(() => {
-      onDone?.({ onboarded: true })
-    }, [onDone])
-    return (
-      <>
-        <span>스위치를 눌러 보세요</span>
-        <TrustedSwitchSetup />
-      </>
-    )
-  },
-}))
-
 mock.module('@/components/settings/SettingsForm', () => ({
   SettingsForm: ({ onClose }: { onClose?: () => void }) => {
     useEffect(() => {
@@ -159,9 +139,7 @@ mock.module('@/components/settings/SettingsForm', () => ({
   },
 }))
 
-mock.module('@/lib/profile', () => ({
-  getProfile: () => profileResult,
-}))
+profileMock.getProfile = () => profileResult
 
 function emit(event: string, payload: unknown) {
   const listener = listeners.get(event)
