@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelUuid
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
@@ -184,7 +185,10 @@ class MainActivity : TauriActivity() {
         .build()
     val filter =
       ScanFilter.Builder()
-        .setDeviceName(BleSetupPolicy.TRUSTED_NAME)
+        // 실제 XIAO는 광고에 이름을 싣지 않고 NUS UUID만 보낸다. setDeviceName으로
+        // 거러내던 동안은 보토자가 자신의 스위치를 등록할 수가 없었다.
+        // 신원은 연결 후 핵드우이키가 다시 가린다.
+        .setServiceUuid(ParcelUuid(BleSwitch.NUS_SERVICE))
         .build()
     runCatching { scanner.startScan(listOf(filter), settings, callback) }
       .onFailure {

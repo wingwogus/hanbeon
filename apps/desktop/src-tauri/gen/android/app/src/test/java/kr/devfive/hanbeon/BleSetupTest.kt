@@ -193,7 +193,10 @@ class BleSetupTrustTest {
                 advertisedServiceUuids = emptyList(),
             ),
         )
-        assertFalse(
+        // A nameless NUS advertiser is exactly what the real XIAO looks like on
+        // the wire, so it must be accepted here; the handshake after connecting
+        // is what proves identity.
+        assertTrue(
             BleSetupPolicy.isTrustedCandidate(
                 name = null,
                 advertisedServiceUuids = listOf(BleSetupPolicy.NUS_SERVICE_UUID),
@@ -379,3 +382,50 @@ private fun manifestFile(): File {
     return roots.firstOrNull { it.isFile }
         ?: error("AndroidManifest.xml was not found from the test working directory")
 }
+
+/**
+ * The real XIAO advertises the NUS service UUID with NO local name in the
+ * packet: CoreBluetooth reports adv keys kCBAdvDataServiceUUIDs but no
+ * kCBAdvDataLocalName. Requiring a name therefore rejects the actual hardware,
+ * which is why the caregiver scan found nothing on device while a Mac (which
+ * accepts name OR NUS uuid, like our desktop build) connected fine.
+ */
+class BleSetupNamelessAdvertisementTest {
+    @Test
+    fun nusAdvertisementWithoutLocalNameIsTrusted() {
+        assertTrue(
+            BleSetupPolicy.isTrustedCandidate(
+                name = null,
+                advertisedServiceUuids = listOf(BleSetupPolicy.NUS_SERVICE_UUID),
+            ),
+        )
+    }
+
+    @Test
+    fun blankNameWithNusIsTrusted() {
+        assertTrue(
+            BleSetupPolicy.isTrustedCandidate(
+                name = "   ",
+                advertisedServiceUuids = listOf(BleSetupPolicy.NUS_SERVICE_UUID),
+            ),
+        )
+    }
+
+    @Test
+    fun namelessAdvertisementWithoutNusStaysRejected() {
+        assertFalse(
+            BleSetupPolicy.isTrustedCandidate(name = null, advertisedServiceUuids = emptyList()),
+        )
+    }
+
+    @Test
+    fun wrongNamedDeviceWithoutNusStaysRejected() {
+        assertFalse(
+            BleSetupPolicy.isTrustedCandidate(
+                name = "NU110_03B248",
+                advertisedServiceUuids = emptyList(),
+            ),
+        )
+    }
+}
+

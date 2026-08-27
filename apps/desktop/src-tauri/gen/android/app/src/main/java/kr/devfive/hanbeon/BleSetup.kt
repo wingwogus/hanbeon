@@ -131,15 +131,24 @@ object BleSetupPolicy {
         )
     }
 
+    /**
+     * 실제 XIAO는 광고 패킷에 이름을 싣지 않고 NUS 서병스 UUID만 보낸다.
+     * 이름을 요구하면 우리 하드웨어를 스스로 걸러낸다 — 상태 가 맞았다.
+     * 그래서 데스탑톱과 같은 기준을 쓴다: 이름이 맞거나 NUS를 광고하면 통과.
+     *
+     * 이름이 있는 데 틀리면 거부한다. 사칭을 막으려면 이름을 받았을 때는
+     * 여전히 엤계하게 본다. 연결 후 핵드우이키가 진짜 심족을 다시 가린다.
+     */
     fun isTrustedCandidate(
         name: String?,
         advertisedServiceUuids: List<String>,
     ): Boolean {
-        if (name.isNullOrBlank()) return false
-        if (!name.equals(TRUSTED_NAME, ignoreCase = true)) return false
-        if (containsForbiddenIdentity(name)) return false
-        return advertisedServiceUuids.isEmpty() ||
+        val advertisesNus =
             advertisedServiceUuids.any { it.equals(NUS_SERVICE_UUID, ignoreCase = true) }
+        if (name.isNullOrBlank()) return advertisesNus
+        if (containsForbiddenIdentity(name)) return false
+        if (name.equals(TRUSTED_NAME, ignoreCase = true)) return true
+        return false
     }
 
     fun publicLabel(raw: String?): String? {
